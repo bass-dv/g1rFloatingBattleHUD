@@ -1,25 +1,21 @@
-Floating Battle HUD v0.5.2
+CURRENTLY ONLY ADAPTED FOR DRAMATIC SHAPE AND POTATO VOXEL
 
-Camera perspective and Z roll are now driven only by Dramatic Shape camera yaw/orbit. Zoom affects HUD size only.
+I couldn't play without this, and none of the UIs out there felt right to me, so I had to make my own. Bug reports are welcome.
 
-# Floating Battle HUD v0.5.1
+## Floating HUD for voxel battles:
+- The HUD follows, scales, and rotates with the camera.
+- Numeric HP display.
+- Capture icon for already registered Pokémon.
+- Status icon.
+- Experience bar.
+- Optional: Display DVs below the HUD for wild Pokémon (HP/Atk/Def/Spd/Spe format).
 
-Fixes the v0.5 perspective seam by subdividing the projected HUD into a 12x6 mesh grid.
-This prevents LOVE's two-triangle affine interpolation from making the two halves of a strongly skewed card look like they have different perspective.
+TEST BRANCH [ [DOWNLOAD ONLY DESKTOP](https://www.mediafire.com/file/gkayowtnp6pg34y/FloatingBattleHUD_v0.7.0.zip/file) ]
+- Full floating battle command menu with FIGHT / PKMN / ITEM / RUN.
+- Custom ITEM menu, is filtered and sorted to show only battle-usable items.
+- Custom battle message boxes with camera-responsive 3D perspective.
 
-The existing Z roll is kept. Set `FloatingHud.MAX_ROTATION_DEG = 0` if you want to isolate the Y-perspective effect while testing.
+## [IMPORTANT] Required settings:
+3D-BTL > ON
 
-Useful controls:
-- `PERSPECTIVE_DEPTH`: strength of near/far edge height difference.
-- `PERSPECTIVE_WIDTH_SQUEEZE`: horizontal compression at maximum yaw.
-- `PERSPECTIVE_GRID_X/Y`: mesh subdivision quality; 12x6 is the default.
-- `MAX_ROTATION_DEG`: existing small Z-roll.
-
-
-## v0.5.5 — PotatoVoxel compatibility
-
-- Supports the legacy Dramatic Shape `snapHUDs` path.
-- Supports PotatoVoxel 1.6.1, which removed `snapHUDs`/`BattleHud` and instead calls `OverworldBattle.drawHudPanels` before the native battle UI.
-- On PotatoVoxel the mod paints the floating cards into the live world canvas at that seam, then suppresses only the native Pokemon HUD blocks for that frame.
-- Native text/menu paper remains PotatoVoxel's own presentation.
-- Runtime host probing accepts DRAMATIC_SHAPE, POTATO_VOXEL, POTATO_VOXEL_MOD, and potato_voxel ids.
+Back Sprites > OFF
