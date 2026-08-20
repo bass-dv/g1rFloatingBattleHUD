@@ -1,7 +1,7 @@
 {
   "id": "FLOATING_BATTLE_HUD",
   "name": "Floating Battle HUD",
-  "version": "0.5.7.1",
+  "version": "0.7.5",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
