@@ -1,5 +1,5 @@
--- Floating Battle HUD v0.7.5
--- Companion mod for Dramatic Shape / PotatoVoxel 1.6.x.
+-- Floating Battle HUD v0.7.10
+-- Companion mod for Dramatic Shape / PotatoVoxel / Voxel Ascendant staged battles.
 --
 -- v0.3 is the visual reset: the frosted cards are gone. The HUD is built
 -- around x8 transparent battleplate art inspired by Gen I's original battle
@@ -8,10 +8,17 @@
 
 local mod = ...
 
--- Dramatic Shape and PotatoVoxel expose the same companion-module seam, but
--- Potato may ship under a different manifest id. Probe the known ids and then
--- adapt to whichever OverworldBattle HUD integration that host provides.
-local HOST_IDS = { "DRAMATIC_SHAPE", "POTATO_VOXEL", "POTATO_VOXEL_MOD", "potato_voxel" }
+-- Dramatic Shape, PotatoVoxel and Voxel Ascendant expose the same public
+-- companion-module seam. Probe the known manifest ids and adapt to the HUD
+-- integration owned by whichever host is installed.
+local HOST_IDS = {
+  "DRAMATIC_SHAPE",
+  "POTATO_VOXEL",
+  "POTATO_VOXEL_MOD",
+  "potato_voxel",
+  "VOXEL_ASCENDANT",
+  "voxel_ascendant",
+}
 local ds, hostId = nil, nil
 if mod.find then
   for _, id in ipairs(HOST_IDS) do
@@ -23,17 +30,46 @@ if mod.find then
   end
 end
 if not (ds and ds.exports and ds.exports.lib) then
-  error("FLOATING_BATTLE_HUD: Dramatic Shape or PotatoVoxel with exports.lib is required", 0)
+  return
 end
 
 local V = ds.exports.lib
 local OverworldBattle = V.require("OverworldBattle")
 local BattleCam = V.require("BattleCam")
 
--- Legacy Dramatic Shape has BattleHud/textRects/snapHUDs. PotatoVoxel 1.6.1
--- removed that composite path and leaves its text box on the native UI canvas.
+-- Ascendant advertises its renderer identity through exports.renderer even when a
+-- packaging fork uses a different manifest id. Prefer that stable public identity.
+local rendererId = ds.exports and ds.exports.renderer and ds.exports.renderer.id or nil
+local isAscendantHost = hostId == "VOXEL_ASCENDANT"
+                     or hostId == "voxel_ascendant"
+                     or rendererId == "VOXEL_ASCENDANT"
+
+-- Voxel Ascendant intentionally withholds its legacy cross-canvas HUD compositor
+-- on iOS: Gen1Recomp presents the world canvas inverted there. Floating Battle HUD
+-- follows the same fail-closed rule and leaves the complete native battle UI alone
+-- on iOS (and on an Ascendant platform the engine cannot identify).
+local function detectedOS()
+  local ok, Platform = pcall(require, "src.core.Platform")
+  if not ok or type(Platform) ~= "table" or type(Platform.detect) ~= "function" then
+    return nil
+  end
+  local detected, info = pcall(Platform.detect)
+  if not detected or type(info) ~= "table" or type(info.os) ~= "string" then
+    return nil
+  end
+  return info.os
+end
+
+local PLATFORM_OS = detectedOS()
+local hostFloatingAvailable = not isAscendantHost
+  or (PLATFORM_OS ~= nil and PLATFORM_OS ~= "iOS")
+
+-- Legacy Dramatic Shape alone exposes the donor BattleHud/textRects composite we
+-- reuse for unreplaced phases. Ascendant may also advertise snapHUDs off iOS, but
+-- its public facade deliberately does not expose BattleHud and its active path is
+-- drawHudPanels, so never classify it as Dramatic Shape from snapHUDs alone.
 local BattleHud = nil
-if type(OverworldBattle.snapHUDs) == "function" then
+if not isAscendantHost and type(OverworldBattle.snapHUDs) == "function" then
   local ok, value = pcall(V.require, "BattleHud")
   if ok then BattleHud = value end
 end
@@ -47,6 +83,23 @@ local ItemEffects = require("src.inventory.ItemEffects")
 
 local g = love.graphics
 local FloatingHud = {}
+
+-- One accessor for the three host families. Dramatic Shape / PotatoVoxel attach
+-- their current staged shot directly to BattleState; Ascendant uses its own field
+-- and also exposes OverworldBattle.shot(). Keeping this translation here prevents
+-- host-specific names from leaking through every pushed menu/foreground path.
+local function battleShot(battle)
+  if not hostFloatingAvailable then return nil end
+  if battle then
+    local direct = battle.voxelAscendantShot or battle.dramaticShapeShot
+    if direct and direct.canvas then return direct end
+  end
+  if OverworldBattle and type(OverworldBattle.shot) == "function" then
+    local ok, shot = pcall(OverworldBattle.shot)
+    if ok and shot and shot.canvas then return shot end
+  end
+  return nil
+end
 
 -- The engine font sheet is black-on-transparent. LOVE tinting multiplies RGB,
 -- so setting white cannot turn those black pixels white. Draw the exact same
@@ -94,10 +147,11 @@ mod.options:define({
     choices = {
       { "x0.8", 0.8 },
       { "x1",   1.0 },
-      { "x1.5", 1.5 },
+      { "x1.2", 1.2 },
+      { "x1.4", 1.4 },
+      { "x1.6", 1.6 },
+      { "x1.8", 1.8 },
       { "x2",   2.0 },
-      { "x2.5", 2.5 },
-      { "x3",   3.0 },
     },
   },
   {
@@ -119,16 +173,16 @@ local function optionToggle(key, fallback)
 end
 
 local function floatingStatusHudEnabled()
-  return optionToggle("floating_status_hud", true)
+  return hostFloatingAvailable and optionToggle("floating_status_hud", true)
 end
 
 local function floatingCommandsEnabled()
-  return optionToggle("floating_commands", true)
+  return hostFloatingAvailable and optionToggle("floating_commands", true)
 end
 
 local HUD_SCALE_CHOICES = {
-  [0.8] = true, [1.0] = true, [1.5] = true,
-  [2.0] = true, [2.5] = true, [3.0] = true,
+  [0.8] = true, [1.0] = true, [1.2] = true, [1.4] = true,
+  [1.6] = true, [1.8] = true, [2.0] = true,
 }
 
 local function floatingHudScale()
@@ -373,6 +427,24 @@ FloatingHud.CHOICE = {
 
   selectedScale = 2.20,
   idleScale = 1.20,
+}
+
+-- Voluntary PKMN selection opens PartyMenu's native SWITCH / STATS / CANCEL
+-- submenu. The native PartyMenu remains the input/callback authority; this block
+-- only gives that hidden submenu the same floating, scale-to-select language as
+-- YES / NO. It is kept separate so tuning it never changes the battle prompt.
+FloatingHud.PARTY_CHOICE = {
+  logicalW = 96.0,
+  logicalH = 78.0,
+  rightOffset = -2.0,
+  aboveGap = 2.0,
+
+  centerX = 48.0,
+  firstCenterY = 14.0,
+  rowStep = 25.0,
+
+  selectedScale = 1.65,
+  idleScale = 1.05,
 }
 
 
@@ -828,7 +900,8 @@ local function worldRectFor(shot, side)
 
   -- PotatoVoxel-only vertical tuning. Keep it tied to UI scale (not distance
   -- perspective), so a chosen offset remains visually consistent while zooming.
-  local potatoHost = type(OverworldBattle.snapHUDs) ~= "function"
+  local potatoHost = not isAscendantHost
+                  and type(OverworldBattle.snapHUDs) ~= "function"
                   and type(OverworldBattle.drawHudPanels) == "function"
   if potatoHost then
     local yOffset = side == "enemy"
@@ -1188,6 +1261,28 @@ local function moveLearnTextBoxInStack(game)
   return nil
 end
 
+-- AskName is another pushed TextBox + ChoiceBox flow, but unlike move learning
+-- the stock battle intentionally blanks the whole field while it is active.
+-- Keep a semantic marker on the concrete TextBox so we can leave the staged
+-- battlefield visible and render that exact native text through our message plate.
+local function nicknameTextBoxInStack(game)
+  local states = game and game.stack and game.stack.states
+  if not states then return nil end
+  for i = #states, 1, -1 do
+    local state = states[i]
+    if state and state.__floatingBattleNicknameText then return state end
+  end
+  return nil
+end
+
+local function nicknameOverlayActiveForBattle(battle)
+  if not battle then return false end
+  local text = battle._floatingBattleNicknameText
+  if text and stateInStack(battle.game, text) then return true end
+  if text then battle._floatingBattleNicknameText = nil end
+  return false
+end
+
 local function moveLearnOverlayActiveForBattle(battle)
   if not battle then return false end
   local game = battle.game
@@ -1537,6 +1632,79 @@ local function renderChoiceCanvas(choice, k)
     local centerX = layout.centerX or (logicalW * 0.5)
     drawCenteredChoice("YES", centerX, layout.yesCenterY or 15, yesScale)
     drawCenteredChoice("NO",  centerX, layout.noCenterY or 40, noScale)
+
+    g.pop()
+  end)
+
+  g.setShader(prevShader)
+  if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
+  g.setBlendMode(prevBlend or "alpha", prevAlpha)
+  g.setColor(1, 1, 1, 1)
+  if not ok then error(err, 0) end
+  return canvas, logicalCW, logicalCH, logicalW, logicalH
+end
+
+-- PartyMenu does not push a ChoiceBox for voluntary battle switching. Instead it
+-- flips `menu.submenu` and keeps SWITCH / STATS / CANCEL in `menu.subItems`, with
+-- `menu.subIndex` as the live native cursor. Because we hide PartyMenu's own pixels,
+-- that submenu used to exist logically but had no replacement drawing at all.
+local function renderPartyChoiceCanvas(menu, k)
+  if not (menu and menu.submenu and type(menu.subItems) == "table"
+      and #menu.subItems > 0) then return nil end
+
+  local layout = FloatingHud.PARTY_CHOICE or FloatingHud.CHOICE
+  local count = #menu.subItems
+  local selectedScale = layout.selectedScale or 1.65
+  local idleScale = layout.idleScale or 1.05
+  local firstY = layout.firstCenterY or 14
+  local rowStep = layout.rowStep or 25
+
+  -- Native battle currently supplies exactly three rows, but size from the live
+  -- list so a ui.party.submenu hook cannot create an invisible extra option.
+  local maxTextW = 0
+  for i = 1, count do
+    local entry = menu.subItems[i]
+    local label = tostring((entry and entry.label) or "")
+    maxTextW = math.max(maxTextW, textWidth(label) * selectedScale)
+  end
+  local logicalW = math.max(layout.logicalW or 96, maxTextW + 12)
+  local lastY = firstY + (count - 1) * rowStep
+  local logicalH = math.max(layout.logicalH or 78, lastY + 14)
+
+  local canvas, cw, ch, pad, raster, logicalCW, logicalCH =
+    panelCanvas("party_choice", logicalW, logicalH)
+  if not canvas then return nil end
+
+  local selected = clamp(math.floor(tonumber(menu.subIndex) or 1), 1, count)
+  local prevCanvas = g.getCanvas()
+  local prevBlend, prevAlpha = g.getBlendMode()
+  local prevShader = g.getShader()
+
+  local ok, err = pcall(function()
+    g.setCanvas(canvas)
+    g.origin()
+    g.clear(0, 0, 0, 0)
+    g.setBlendMode("alpha")
+    g.setShader()
+    g.setColor(1, 1, 1, 1)
+    g.push()
+    g.scale(raster, raster)
+    g.translate(pad, pad)
+
+    local centerX = layout.centerX or (logicalW * 0.5)
+    -- If logicalW had to grow for a hook-added long label, keep the list centered
+    -- in the actual plane rather than at the original authored width's midpoint.
+    if logicalW ~= (layout.logicalW or 96) then centerX = logicalW * 0.5 end
+
+    for i = 1, count do
+      local entry = menu.subItems[i]
+      local label = tostring((entry and entry.label) or "")
+      local scale = i == selected and selectedScale or idleScale
+      local cy = firstY + (i - 1) * rowStep
+      local w = textWidth(label) * scale
+      local h = 8 * scale
+      drawShadowText(label, centerX - w * 0.5, cy - h * 0.5, k, scale)
+    end
 
     g.pop()
   end)
@@ -2176,6 +2344,37 @@ local function drawPartyPanel(menu, battle, shot)
   g.origin()
   drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k,
                         cameraYawSignal(), hudRotation(), "pkmn")
+
+  -- Voluntary battle switching is a submenu INSIDE PartyMenu, not a pushed
+  -- ChoiceBox. PartyMenu's native renderer is hidden by this mod, so paint the
+  -- live native submenu here while leaving its update/actions completely intact.
+  if menu.submenu and menu.battle and menu.onSwitch then
+    local subCanvas, subCW, subCH, subLogicalW, subLogicalH =
+      renderPartyChoiceCanvas(menu, k)
+    if subCanvas then
+      local layout = FloatingHud.PARTY_CHOICE or FloatingHud.CHOICE
+      local planeW = subLogicalW * k
+      local planeH = subLogicalH * k
+
+      -- Match the YES/NO language: a transparent floating list right-aligned to
+      -- its parent panel. Prefer just above PKMN; clamp the whole plane on-screen
+      -- so mobile/tall HUD scales cannot hide SWITCH again.
+      local subCX = rect[1] + rect[3] - planeW * 0.5
+                    + (layout.rightOffset or -2) * k
+      local subCY = rect[2] - planeH * 0.5 - (layout.aboveGap or 2) * k
+      local margin = FloatingHud.MARGIN or 4
+      subCX = clamp(subCX, margin + planeW * 0.5,
+                    math.max(margin + planeW * 0.5,
+                             shot.pw - margin - planeW * 0.5))
+      subCY = clamp(subCY, margin + planeH * 0.5,
+                    math.max(margin + planeH * 0.5,
+                             shot.ph - margin - planeH * 0.5))
+
+      drawPerspectiveCanvas(subCanvas, subCX, subCY, subCW * k, subCH * k,
+                            cameraYawSignal(), hudRotation(), "pkmn_choice")
+    end
+  end
+
   g.pop()
   return true
 end
@@ -2401,6 +2600,32 @@ local function drawBattleFlowPanel(battle, shot)
   local game = battle and battle.game
   local top = game and topState(game) or nil
 
+  -- Caught-Pokemon AskName uses a native TextBox with opts.choice. The stock
+  -- renderer blanks the entire battle behind it; when we claim this semantic
+  -- flow we keep the staged scene visible and project both the native text and
+  -- its native ChoiceBox with the same message / YES-NO surfaces used elsewhere.
+  if nicknameOverlayActiveForBattle(battle) then
+    local text = battle._floatingBattleNicknameText
+    local choice = battle._floatingBattleChoice
+    if choice and top == choice and stateInStack(game, choice)
+        and choice.__floatingBattleChoiceText == text then
+      local drewMessage = drawMoveLearnMessagePanel(text, battle, shot)
+      local drewChoice = drawChoicePanel(choice, battle, shot)
+      if drewMessage or drewChoice then
+        battle._floatingBattleNicknameSceneFrame = battle.frame
+        battle._floatingBattleChoiceSceneFrame = battle.frame
+      end
+      return "nickname"
+    end
+    if text and top == text and stateInStack(game, text) then
+      if drawMoveLearnMessagePanel(text, battle, shot) then
+        battle._floatingBattleNicknameSceneFrame = battle.frame
+      end
+      return "nickname"
+    end
+    return "nickname"
+  end
+
   -- Pushed foregrounds (MoveLearnMenu/TextBox/ChoiceBox) must be painted into
   -- shot.canvas too. Desktop can get away with drawing these in render.hud after
   -- the battle viewport is composed; Android/iOS cannot reliably do so. This is
@@ -2487,11 +2712,12 @@ local function bottomOwnedThisFrame(battle)
       or (owned == "party" and partyOverlayActiveForBattle(battle))
       or (owned == "item" and itemOverlayActiveForBattle(battle))
       or (owned == "learn" and moveLearnOverlayActiveForBattle(battle))
+      or (owned == "nickname" and nicknameOverlayActiveForBattle(battle))
 end
 
 local function drawTextGlass(battle, shot)
-  -- Legacy Dramatic Shape only. PotatoVoxel removed the frosted text composite
-  -- and intentionally keeps the native white text/menu paper.
+  -- Legacy Dramatic Shape only. PotatoVoxel and Voxel Ascendant use their
+  -- own panel/native-paper paths instead of this donor composite.
   if not (BattleHud and OverworldBattle.textRects) then return end
   for _, rect in pairs(OverworldBattle.textRects(battle)) do
     BattleHud.panel(toWorld(rect, shot), shot, true)
@@ -2507,7 +2733,7 @@ local function supportedFloatingLayout(battle)
   if not battle then return false end
   if vrActive() then return false end
   if OverworldBattle.backPinned and OverworldBattle.backPinned() then return false end
-  if battle.safari or battle.demo or battle.blankForAskName then return false end
+  if battle.safari or battle.demo then return false end
   return true
 end
 
@@ -2595,55 +2821,17 @@ local function drawFloatingSceneUI(battle, shot, includeTextGlass)
   return statusDrawn, bottomKind ~= nil
 end
 
-if type(OverworldBattle.snapHUDs) == "function" then
-  -- Dramatic Shape 1.6.0 path: it asks snapHUDs to composite HUD furniture into
-  -- the window-resolution world canvas, then suppresses the native HUD itself.
-  hostMode = "dramatic_shape"
-  local BASE_KEY = "_floatingBattleHudBaseSnapHUDs"
-  if not OverworldBattle[BASE_KEY] then
-    OverworldBattle[BASE_KEY] = OverworldBattle.snapHUDs
-  end
-  local baseSnapHUDs = OverworldBattle[BASE_KEY]
+if isAscendantHost and not hostFloatingAvailable then
+  -- Native fallback by design. Do not install any pixel suppression or menu
+  -- ownership on iOS/unknown Ascendant platforms; all helpers above also report
+  -- their floating layers disabled, so the rest of the file stays transparent.
+  hostMode = "voxel_ascendant_ios_fallback"
 
-  function FloatingHud.snapHUDs(battle, shot)
-    local wantStatus = floatingStatusHudEnabled()
-    local wantCommands = floatingCommandsEnabled()
-
-    -- With both layers disabled, hand the complete pass back untouched. This is
-    -- the clean compatibility mode for another battle-UI mod.
-    if not wantStatus and not wantCommands then
-      return baseSnapHUDs(battle, shot)
-    end
-
-    local statusDrawn, bottomDrawn = drawFloatingSceneUI(battle, shot, true)
-
-    -- Commands can remain floating while status plates are delegated. Dramatic
-    -- Shape's stock snapHUDs couples status bands with text-panel glass, so call
-    -- it with textRects temporarily empty: native/third-party status survives,
-    -- while our custom message/command surface is not given a second backdrop.
-    if not wantStatus and bottomDrawn then
-      local nativeTextRects = OverworldBattle.textRects
-      if type(nativeTextRects) == "function" then
-        OverworldBattle.textRects = function() return {} end
-      end
-      local ok, nativeUp = pcall(baseSnapHUDs, battle, shot)
-      OverworldBattle.textRects = nativeTextRects
-      if not ok then error(nativeUp, 0) end
-      return nativeUp or true
-    end
-
-    if statusDrawn or bottomDrawn then return true end
-    return baseSnapHUDs(battle, shot)
-  end
-
-  OverworldBattle.snapHUDs = FloatingHud.snapHUDs
-
-elseif type(OverworldBattle.drawHudPanels) == "function" then
-  -- PotatoVoxel 1.6.1 path. It no longer has snapHUDs: BattleState:draw first
-  -- points Renderer at shot.canvas, then calls drawHudPanels before the native
-  -- battle UI. We use that moment to paint our floating HUD into shot.canvas,
-  -- and suppress only the native Pokemon HUD blocks later in the same frame.
-  hostMode = "potato_voxel"
+elseif isAscendantHost and type(OverworldBattle.drawHudPanels) == "function" then
+  -- Voxel Ascendant's live path mirrors the modern panel-host seam: BattleState
+  -- stores voxelAscendantShot, binds the world override, then calls drawHudPanels
+  -- before the engine's own battle UI. Paint into that shot.canvas here.
+  hostMode = "voxel_ascendant"
 
   local PANEL_KEY = "_floatingBattleHudBaseDrawHudPanels"
   if not OverworldBattle[PANEL_KEY] then
@@ -2651,36 +2839,27 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
   end
   local baseDrawHudPanels = OverworldBattle[PANEL_KEY]
 
-  function FloatingHud.drawPotatoHudPanels(battle)
+  function FloatingHud.drawPanelHostHudPanels(battle)
     if not battle then return baseDrawHudPanels(battle) end
-    battle._floatingBattleHudPotatoDrawn = false
-    local shot = battle.dramaticShapeShot
+    battle._floatingBattleHudPanelDrawn = false
+    local shot = battleShot(battle)
     local statusDrawn = drawFloatingSceneUI(battle, shot, false)
     if statusDrawn then
-      battle._floatingBattleHudPotatoDrawn = true
+      battle._floatingBattleHudPanelDrawn = true
       return
     end
     return baseDrawHudPanels(battle)
   end
 
-  OverworldBattle.drawHudPanels = FloatingHud.drawPotatoHudPanels
+  OverworldBattle.drawHudPanels = FloatingHud.drawPanelHostHudPanels
 
-  -- Potato's status_hud_visible predicate is not the only path that can emit
-  -- Gen I HUD pixels: BattleState.drawHUDs also owns the actual status blocks
-  -- (and transient party-ball chrome).  The reference replacement UI keeps the
-  -- method alive but runs it under an empty scissor, so lifecycle side effects
-  -- still happen while every native HUD pixel is discarded.  Importantly, the
-  -- command/menu/text UI is NOT drawn by drawHUDs, so it remains untouched.
   local DRAW_KEY = "_floatingBattleHudBaseDrawHUDs"
-  if not BattleState[DRAW_KEY] then
-    BattleState[DRAW_KEY] = BattleState.drawHUDs
-  end
+  if not BattleState[DRAW_KEY] then BattleState[DRAW_KEY] = BattleState.drawHUDs end
   local baseDrawHUDs = BattleState[DRAW_KEY]
   if type(baseDrawHUDs) == "function" then
     function BattleState:drawHUDs(...)
       local owns = floatingStatusHudEnabled()
-                   and self.dramaticShapeShot
-                   and not self.blankForAskName
+                   and battleShot(self)
                    and plateImage("enemy") and plateImage("player")
       if owns then
         local oldScissor = { g.getScissor() }
@@ -2700,15 +2879,11 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
     end
   end
 
-  -- Suppress the native Pokemon status/nameplate surface. Bottom message/menu
-  -- ownership is handled separately below and only for phases whose floating
-  -- replacement already exists. Party/item UI remains native for now.
   local statusHookInstalled = false
   if mod.hooks and type(mod.hooks.wrap) == "function" then
     mod.hooks:wrap("battle.status_hud_visible", function(next, state)
-      if floatingStatusHudEnabled()
-          and state and state.dramaticShapeShot
-          and state._floatingBattleHudPotatoDrawn then
+      if floatingStatusHudEnabled() and state and battleShot(state)
+          and state._floatingBattleHudPanelDrawn then
         return false
       end
       return next(state)
@@ -2716,9 +2891,6 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
     statusHookInstalled = true
   end
 
-  -- Compatibility fallback for engines/renderers that bypass the launcher hook.
-  -- The drawHUDs scissor above is the visual hard-stop; this predicate fallback
-  -- keeps any status-HUD queries consistent without touching bottom UI.
   if not statusHookInstalled then
     local STATUS_KEY = "_floatingBattleHudBaseStatusHUDVisible"
     if not BattleState[STATUS_KEY] then
@@ -2727,8 +2899,125 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
     local baseStatusHUDVisible = BattleState[STATUS_KEY]
     if type(baseStatusHUDVisible) == "function" then
       function BattleState:statusHUDVisible(...)
-        if floatingStatusHudEnabled()
-            and self.dramaticShapeShot and self._floatingBattleHudPotatoDrawn then
+        if floatingStatusHudEnabled() and battleShot(self)
+            and self._floatingBattleHudPanelDrawn then
+          return false
+        end
+        return baseStatusHUDVisible(self, ...)
+      end
+    end
+  end
+
+elseif type(OverworldBattle.snapHUDs) == "function" then
+  -- Dramatic Shape 1.6.x path: it asks snapHUDs to composite HUD furniture into
+  -- the window-resolution world canvas, then suppresses the native HUD itself.
+  hostMode = "dramatic_shape"
+  local BASE_KEY = "_floatingBattleHudBaseSnapHUDs"
+  if not OverworldBattle[BASE_KEY] then
+    OverworldBattle[BASE_KEY] = OverworldBattle.snapHUDs
+  end
+  local baseSnapHUDs = OverworldBattle[BASE_KEY]
+
+  function FloatingHud.snapHUDs(battle, shot)
+    local wantStatus = floatingStatusHudEnabled()
+    local wantCommands = floatingCommandsEnabled()
+
+    if not wantStatus and not wantCommands then
+      return baseSnapHUDs(battle, shot)
+    end
+
+    local statusDrawn, bottomDrawn = drawFloatingSceneUI(battle, shot, true)
+
+    if not wantStatus and bottomDrawn then
+      local nativeTextRects = OverworldBattle.textRects
+      if type(nativeTextRects) == "function" then
+        OverworldBattle.textRects = function() return {} end
+      end
+      local ok, nativeUp = pcall(baseSnapHUDs, battle, shot)
+      OverworldBattle.textRects = nativeTextRects
+      if not ok then error(nativeUp, 0) end
+      return nativeUp or true
+    end
+
+    if statusDrawn or bottomDrawn then return true end
+    return baseSnapHUDs(battle, shot)
+  end
+
+  OverworldBattle.snapHUDs = FloatingHud.snapHUDs
+
+elseif type(OverworldBattle.drawHudPanels) == "function" then
+  -- PotatoVoxel path. Like Ascendant, BattleState calls drawHudPanels before the
+  -- native battle UI; the only host difference is the BattleState shot field.
+  hostMode = "potato_voxel"
+
+  local PANEL_KEY = "_floatingBattleHudBaseDrawHudPanels"
+  if not OverworldBattle[PANEL_KEY] then
+    OverworldBattle[PANEL_KEY] = OverworldBattle.drawHudPanels
+  end
+  local baseDrawHudPanels = OverworldBattle[PANEL_KEY]
+
+  function FloatingHud.drawPanelHostHudPanels(battle)
+    if not battle then return baseDrawHudPanels(battle) end
+    battle._floatingBattleHudPanelDrawn = false
+    local shot = battleShot(battle)
+    local statusDrawn = drawFloatingSceneUI(battle, shot, false)
+    if statusDrawn then
+      battle._floatingBattleHudPanelDrawn = true
+      return
+    end
+    return baseDrawHudPanels(battle)
+  end
+
+  OverworldBattle.drawHudPanels = FloatingHud.drawPanelHostHudPanels
+
+  local DRAW_KEY = "_floatingBattleHudBaseDrawHUDs"
+  if not BattleState[DRAW_KEY] then BattleState[DRAW_KEY] = BattleState.drawHUDs end
+  local baseDrawHUDs = BattleState[DRAW_KEY]
+  if type(baseDrawHUDs) == "function" then
+    function BattleState:drawHUDs(...)
+      local owns = floatingStatusHudEnabled()
+                   and battleShot(self)
+                   and plateImage("enemy") and plateImage("player")
+      if owns then
+        local oldScissor = { g.getScissor() }
+        g.push("all")
+        g.setScissor(0, 0, 0, 0)
+        local ok, result = pcall(baseDrawHUDs, self, ...)
+        g.pop()
+        if oldScissor[1] then
+          g.setScissor(oldScissor[1], oldScissor[2], oldScissor[3], oldScissor[4])
+        else
+          g.setScissor()
+        end
+        if not ok then error(result, 0) end
+        return result
+      end
+      return baseDrawHUDs(self, ...)
+    end
+  end
+
+  local statusHookInstalled = false
+  if mod.hooks and type(mod.hooks.wrap) == "function" then
+    mod.hooks:wrap("battle.status_hud_visible", function(next, state)
+      if floatingStatusHudEnabled() and state and battleShot(state)
+          and state._floatingBattleHudPanelDrawn then
+        return false
+      end
+      return next(state)
+    end, 12000)
+    statusHookInstalled = true
+  end
+
+  if not statusHookInstalled then
+    local STATUS_KEY = "_floatingBattleHudBaseStatusHUDVisible"
+    if not BattleState[STATUS_KEY] then
+      BattleState[STATUS_KEY] = BattleState.statusHUDVisible
+    end
+    local baseStatusHUDVisible = BattleState[STATUS_KEY]
+    if type(baseStatusHUDVisible) == "function" then
+      function BattleState:statusHUDVisible(...)
+        if floatingStatusHudEnabled() and battleShot(self)
+            and self._floatingBattleHudPanelDrawn then
           return false
         end
         return baseStatusHUDVisible(self, ...)
@@ -2763,6 +3052,8 @@ if type(baseBattleUpdate) == "function" then
       self._floatingBattlePartyPending = nil
       self._floatingBattleItemPending = nil
       self._floatingBattleItemTargetPending = nil
+      self._floatingBattleItemTargetSource = nil
+      self._floatingBattleItemTargetId = nil
       self._floatingBattleChoicePartyPending = nil
     end
     local ownsCommand = commandsEnabled
@@ -2854,6 +3145,8 @@ do
       battle._floatingBattlePartyMenu = menu
       battle._floatingBattlePartyPending = nil
       battle._floatingBattleItemTargetPending = nil
+      battle._floatingBattleItemTargetSource = nil
+      battle._floatingBattleItemTargetId = nil
       battle._floatingBattleChoicePartyPending = nil
 
       -- screen.render_visible can ask about the same state every frame. Never
@@ -2882,8 +3175,7 @@ do
       menu.draw = function(self, ...)
         self.isOpaque = false
         battle._floatingBattlePartyMenu = self
-        local shot = battle.dramaticShapeShot
-                  or (OverworldBattle.shot and OverworldBattle.shot())
+        local shot = battleShot(battle)
         if shot and drawPartyPanel(self, battle, shot) then return end
         if type(baseDraw) == "function" then return baseDraw(self, ...) end
       end
@@ -2891,8 +3183,7 @@ do
       menu.drawWidescreen = function(self, ...)
         self.isOpaque = false
         battle._floatingBattlePartyMenu = self
-        local shot = battle.dramaticShapeShot
-                  or (OverworldBattle.shot and OverworldBattle.shot())
+        local shot = battleShot(battle)
         if shot and drawPartyPanel(self, battle, shot) then return end
         if type(baseWide) == "function" then return baseWide(self, ...) end
       end
@@ -2954,8 +3245,7 @@ do
             and assetImage(PKMN_PLATE_ASSET) then
           self.isOpaque = false
           battle._floatingBattlePartyMenu = self
-          local shot = battle.dramaticShapeShot
-                    or (OverworldBattle.shot and OverworldBattle.shot())
+          local shot = battleShot(battle)
           if shot and drawPartyPanel(self, battle, shot) then return end
         end
         return baseDraw(self, ...)
@@ -2970,8 +3260,7 @@ do
             and assetImage(PKMN_PLATE_ASSET) then
           self.isOpaque = false
           battle._floatingBattlePartyMenu = self
-          local shot = battle.dramaticShapeShot
-                    or (OverworldBattle.shot and OverworldBattle.shot())
+          local shot = battleShot(battle)
           if shot and drawPartyPanel(self, battle, shot) then return end
         end
         return baseWide(self, ...)
@@ -3043,8 +3332,7 @@ do
           )
           if top == menu then
             menu.isOpaque = false
-            local shot = battle.dramaticShapeShot
-                      or (OverworldBattle.shot and OverworldBattle.shot())
+            local shot = battleShot(battle)
             if shot and battle._floatingBattlePartySceneFrame ~= battle.frame then
               local ok, err = pcall(drawPartyPanel, menu, battle, shot)
               if not ok then
@@ -3109,6 +3397,11 @@ do
           local up = input:wasPressed("up")
           local down = input:wasPressed("down")
           if up or down then
+            if battle._floatingBattleItemTargetSource == self then
+              battle._floatingBattleItemTargetPending = nil
+              battle._floatingBattleItemTargetSource = nil
+              battle._floatingBattleItemTargetId = nil
+            end
             local delta = up and -1 or 1
             if moveBattleItemView(self, delta) then
               pcall(function()
@@ -3121,12 +3414,37 @@ do
           -- This battle surface is intentionally a single vertical list.
           if input:wasPressed("left") or input:wasPressed("right")
               or input:wasPressed("select") then
+            if battle._floatingBattleItemTargetSource == self then
+              battle._floatingBattleItemTargetPending = nil
+              battle._floatingBattleItemTargetSource = nil
+              battle._floatingBattleItemTargetId = nil
+            end
             return
           end
 
           if input:wasPressed("a") then
             local row = selectedBattleItemRow(self)
-            local nativeIndex = row and nativeBattleItemIndex(self, row.value) or nil
+            if not row then return end
+
+            -- Dispatch the visible Floating HUD row through the concrete Bag
+            -- state's FINAL onChoose callback instead of forcing ListMenu:update
+            -- to rediscover A on a native flat index. This is important for Useful
+            -- Bag: its battle screen projects only one pocket into self.items, while
+            -- our floating battle list intentionally aggregates every battle-usable
+            -- pocket. A POTION can therefore be visible here while absent from the
+            -- currently projected Useful Bag rows. Useful Bag's wrapper accepts the
+            -- row object and then delegates to vanilla BagMenu, whose use flow keys
+            -- off item.value; no pocket mutation or bypass is required.
+            local nativeIndex = nativeBattleItemIndex(self, row.value)
+            local actionRow = nativeIndex and self.items[nativeIndex] or {
+              value = row.value,
+              label = row.label,
+              right = "x" .. tostring(row.count or 0),
+            }
+
+            -- Keep the native cursor coherent when the selected item does happen to
+            -- exist in the active native/pocket projection. When it does not, leave
+            -- Useful Bag's pocket cursor untouched: onChoose only needs actionRow.
             if nativeIndex then
               self.index = nativeIndex
               local nativeRows = tonumber(self.rows) or 7
@@ -3136,29 +3454,63 @@ do
               elseif self.index - self.scroll < 1 then
                 self.scroll = self.index - 1
               end
+            end
 
-              -- Medicine/status items can push PartyMenu synchronously from the
-              -- native onChoose callback. Arm a one-action latch BEFORE native
-              -- update so PartyMenu.new can claim that target picker immediately.
+            local def = self.game and self.game.data and self.game.data.items
+                        and self.game.data.items[row.value] or nil
+            local expectsPartyTarget = false
+            if ItemEffects and type(ItemEffects.needsTarget) == "function" then
+              local okTarget, value = pcall(ItemEffects.needsTarget,
+                                            row.value, def,
+                                            self.game and self.game.data or nil)
+              expectsPartyTarget = okTarget and value and true or false
+            else
+              expectsPartyTarget = row.category == "HEALING"
+            end
+            if ItemEffects and type(ItemEffects.isBall) == "function" then
+              local okBall, isBall = pcall(ItemEffects.isBall, row.value)
+              if okBall and isBall then expectsPartyTarget = false end
+            end
+
+            if expectsPartyTarget then
               battle._floatingBattleItemTargetPending = true
-              local a, b, c = nativeUpdate(self, dt, ...)
+              battle._floatingBattleItemTargetSource = self
+              battle._floatingBattleItemTargetId = row.value
+            else
+              battle._floatingBattleItemTargetPending = nil
+              battle._floatingBattleItemTargetSource = nil
+              battle._floatingBattleItemTargetId = nil
+            end
 
-              -- If no PartyMenu consumed the latch during the native action, this
-              -- item did not open a target picker (Ball/X-item/etc.). Do not let a
-              -- stale latch capture some unrelated Party screen later.
-              if battle._floatingBattleItemTargetPending then
-                battle._floatingBattleItemTargetPending = nil
-              end
+            local onChoose = self.onChoose
+            if type(onChoose) == "function" then
+              pcall(function()
+                require("src.core.Sound").play(self.game.data, "Press_AB")
+              end)
+              onChoose(actionRow, self)
+            end
 
-              if stateInStack(self.game, self) then
-                refreshBattleItemView(self, battle, row.value)
-              end
-              return a, b, c
+            -- A target picker is normally pushed synchronously, but keep the latch
+            -- alive for target items until PartyMenu actually claims it. This also
+            -- covers screen-registry wrappers that defer the push by a frame.
+            if not expectsPartyTarget then
+              battle._floatingBattleItemTargetPending = nil
+              battle._floatingBattleItemTargetSource = nil
+              battle._floatingBattleItemTargetId = nil
+            end
+
+            if stateInStack(self.game, self) then
+              refreshBattleItemView(self, battle, row.value)
             end
             return
           end
 
           if input:wasPressed("b") then
+            if battle._floatingBattleItemTargetSource == self then
+              battle._floatingBattleItemTargetPending = nil
+              battle._floatingBattleItemTargetSource = nil
+              battle._floatingBattleItemTargetId = nil
+            end
             return nativeUpdate(self, dt, ...)
           end
           -- No input: keep the native flat cursor dormant. All gameplay work is
@@ -3173,54 +3525,18 @@ do
       menu.draw = function(self, ...)
         self.isOpaque = false
         battle._floatingBattleItemMenu = self
-        local shot = battle.dramaticShapeShot
-                  or (OverworldBattle.shot and OverworldBattle.shot())
+        local shot = battleShot(battle)
         if shot and drawItemPanel(self, battle, shot) then return end
         if type(nativeDraw) == "function" then return nativeDraw(self, ...) end
       end
       menu.drawWidescreen = function(self, ...)
         self.isOpaque = false
         battle._floatingBattleItemMenu = self
-        local shot = battle.dramaticShapeShot
-                  or (OverworldBattle.shot and OverworldBattle.shot())
+        local shot = battleShot(battle)
         if shot and drawItemPanel(self, battle, shot) then return end
         if type(nativeWide) == "function" then return nativeWide(self, ...) end
       end
       return menu
-    end
-
-    -- Useful Bag compatibility -------------------------------------------------
-    -- Useful Bag replaces the public "BagMenu" screen through Data.screens.
-    -- Keep that replacement everywhere except inside a staged battle owned by
-    -- FLOATING COMMANDS. BattleState builds queued battle screens through
-    -- buildScreen(), so this bypasses only Useful Bag's battle factory and uses
-    -- the builtin BagMenu constructor captured above. Useful Bag's capacity,
-    -- overworld pockets, PC behavior and sorting remain untouched.
-    local function usefulBagLoaded()
-      if type(mod.find) ~= "function" then return false end
-      local ok, hit = pcall(mod.find, "useful_bag")
-      return ok and hit ~= nil
-    end
-
-    if type(BattleState.buildScreen) == "function"
-        and not BattleState.__floatingBattleHudUsefulBagCompat then
-      BattleState.__floatingBattleHudUsefulBagCompat = true
-      local nativeBuildScreen = BattleState.buildScreen
-
-      BattleState.buildScreen = function(self, id, ...)
-        if id == "BagMenu" and floatingCommandsEnabled() and usefulBagLoaded() then
-          local opts = select(1, ...)
-          if type(opts) == "table" and opts.battle then
-            local menu = baseNew(self.game, opts)
-            if menu then
-              menu.screenId = menu.screenId or "BagMenu"
-              menu.__floatingUsefulBagBypassed = true
-              return claimBattleItem(menu, opts.battle or self)
-            end
-          end
-        end
-        return nativeBuildScreen(self, id, ...)
-      end
     end
 
     if type(baseNew) == "function" then
@@ -3275,8 +3591,7 @@ do
           )
           if top == menu then
             menu.isOpaque = false
-            local shot = battle.dramaticShapeShot
-                      or (OverworldBattle.shot and OverworldBattle.shot())
+            local shot = battleShot(battle)
             if shot and battle._floatingBattleItemSceneFrame ~= battle.frame then
               local ok, err = pcall(drawItemPanel, menu, battle, shot)
               if not ok then
@@ -3448,8 +3763,7 @@ do
         local battle = battleStateInStack(game)
         if not battle then return out end
         local top = topState(game)
-        local shot = battle.dramaticShapeShot
-                  or (OverworldBattle.shot and OverworldBattle.shot())
+        local shot = battleShot(battle)
         if not shot then return out end
 
         local text = battle._floatingBattleMoveLearnText
@@ -3484,6 +3798,79 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- Caught-Pokemon nickname prompt presentation
+-- ---------------------------------------------------------------------------
+-- Gen1Recomp's AskName path intentionally sets blankForAskName=true before
+-- returning a TextBox, which makes BattleState:drawClassic paint a full white
+-- 160x144 field. For staged voxel battles that destroys the very scene our
+-- floating prompt is anchored to. Keep every native TextBox/ChoiceBox callback
+-- and NamingScreen handoff intact, but cancel only that presentation blank and
+-- tag the concrete TextBox for our existing message renderer.
+do
+  local ASK_NICK_KEY = "_floatingBattleHudBaseAskNicknameUI"
+  if type(BattleState.askNicknameUI) == "function" then
+    if not BattleState[ASK_NICK_KEY] then
+      BattleState[ASK_NICK_KEY] = BattleState.askNicknameUI
+    end
+    local baseAskNicknameUI = BattleState[ASK_NICK_KEY]
+
+    function BattleState:askNicknameUI(...)
+      local box = baseAskNicknameUI(self, ...)
+      if not floatingCommandsEnabled() then return box end
+      if not (box and isTextBoxState(box) and battleShot(self)) then return box end
+      if self.safari or self.demo then return box end
+
+      -- Presentation only: the original choice callback still clears this flag
+      -- and still pushes NamingScreen on YES. Clearing it now merely prevents
+      -- drawClassic / compatible hosts from replacing the staged scene with white.
+      self.blankForAskName = false
+      box.isOpaque = false
+      box.__floatingBattleNicknameText = self
+      self._floatingBattleNicknameText = box
+      return box
+    end
+  end
+
+  if mod.hooks and type(mod.hooks.wrap) == "function" then
+    mod.hooks:wrap("screen.render_visible", function(next, state)
+      local visible = next(state)
+      if not floatingCommandsEnabled() then return visible end
+      local game = state and state.game
+      local battle = game and battleStateInStack(game) or nil
+      if state and battle and state.__floatingBattleNicknameText == battle then
+        state.isOpaque = false
+        battle._floatingBattleNicknameText = state
+        return false
+      end
+      return visible
+    end, 20018)
+
+    mod.hooks:wrap("render.hud", function(next, game, viewport)
+      local out = next(game, viewport)
+      if not floatingCommandsEnabled() then return out end
+      local battle = battleStateInStack(game)
+      if not battle then return out end
+      local text = battle._floatingBattleNicknameText
+      if not text then return out end
+      if not stateInStack(game, text) then
+        battle._floatingBattleNicknameText = nil
+        return out
+      end
+      local top = topState(game)
+      if top ~= text then return out end
+      local shot = battleShot(battle)
+      if shot and battle._floatingBattleNicknameSceneFrame ~= battle.frame then
+        local ok, err = pcall(drawMoveLearnMessagePanel, text, battle, shot)
+        if not ok then
+          mod.log:warn("floating nickname message failed: %s", tostring(err))
+        end
+      end
+      return out
+    end, 15175)
+  end
+end
+
+-- ---------------------------------------------------------------------------
 -- Battle YES / NO presentation
 -- ---------------------------------------------------------------------------
 -- Battle sayChoice pushes a real ChoiceBox above BattleState. Keep that box as
@@ -3500,6 +3887,8 @@ do
     local function claimBattleChoice(choice, battle, sourceText)
       if not floatingCommandsEnabled() then return choice end
       if not (choice and battle) then return choice end
+      -- sourceText is also used by the caught-Pokemon nickname prompt;
+      -- any tagged source keeps the native callback/input while replacing pixels.
       choice.isOpaque = false
       choice.__floatingBattleChoice = battle
       choice.__floatingBattleChoiceText = sourceText
@@ -3556,13 +3945,18 @@ do
       ChoiceBox.new = function(game, onChoose, opts, ...)
         local battle = battleStateInStack(game)
         local sourceText = moveLearnTextBoxInStack(game)
+        local nicknameText = nicknameTextBoxInStack(game)
         local choice = baseNew(game, onChoose, opts, ...)
         if not floatingCommandsEnabled() then return choice end
-        -- A move-learning TextBox owns its own prompt and must replace the stale
-        -- battle message below it. Ordinary battle choices keep the old path.
+        -- Move-learning and caught-nickname TextBoxes each own the message that
+        -- must remain visible under their native ChoiceBox.
         if choice and battle and sourceText
             and sourceText.__floatingBattleMoveLearnText == battle then
           return claimBattleChoice(choice, battle, sourceText)
+        end
+        if choice and battle and nicknameText
+            and nicknameText.__floatingBattleNicknameText == battle then
+          return claimBattleChoice(choice, battle, nicknameText)
         end
         if choice and battle and battle.phase == "messages" then
           return claimBattleChoice(choice, battle, nil)
@@ -3581,14 +3975,19 @@ do
         local battle = state and state.__floatingBattleChoice or stackedBattle
         local sourceText = state and state.__floatingBattleChoiceText
           or (game and moveLearnTextBoxInStack(game) or nil)
+          or (game and nicknameTextBoxInStack(game) or nil)
         local isLearnChoice = state and battle and sourceText
           and sourceText.__floatingBattleMoveLearnText == battle
+          and getmetatable(state) == ChoiceBox
+        local isNicknameChoice = state and battle and sourceText
+          and sourceText.__floatingBattleNicknameText == battle
           and getmetatable(state) == ChoiceBox
         local isBattleChoice = state and battle and battle.phase == "messages"
           and (state.__floatingBattleChoice == battle
                or getmetatable(state) == ChoiceBox)
-        if isLearnChoice or isBattleChoice then
-          claimBattleChoice(state, battle, isLearnChoice and sourceText or nil)
+        if isLearnChoice or isNicknameChoice or isBattleChoice then
+          claimBattleChoice(state, battle,
+                            (isLearnChoice or isNicknameChoice) and sourceText or nil)
           state.isOpaque = false
           return false
         end
@@ -3607,8 +4006,7 @@ do
           )
           if top == choice then
             choice.isOpaque = false
-            local shot = battle.dramaticShapeShot
-                      or (OverworldBattle.shot and OverworldBattle.shot())
+            local shot = battleShot(battle)
             if shot and battle._floatingBattleChoiceSceneFrame ~= battle.frame then
               -- Fallback only. The preferred path now paints ChoiceBox into the
               -- staged battle canvas before mobile composites the viewport.
@@ -3660,7 +4058,7 @@ if type(baseDrawTextArea) == "function" then
     -- Safari/demo remain native because this mod intentionally does not replace
     -- their specialized bottom UI.
     local ownsBottomSurface = floatingCommandsEnabled()
-      and self.dramaticShapeShot
+      and battleShot(self)
       and not self.safari and not self.demo
     if ownsBottomSurface then
       g.push("all")
@@ -3678,7 +4076,7 @@ local bottomHookInstalled = false
 if mod.hooks and type(mod.hooks.wrap) == "function" then
   mod.hooks:wrap("battle.bottom_ui_visible", function(next, state)
     if floatingCommandsEnabled()
-        and state and state.dramaticShapeShot
+        and state and battleShot(state)
         and not state.safari and not state.demo then
       return false
     end
@@ -3697,7 +4095,7 @@ if not bottomHookInstalled then
   if type(baseBottomUIVisible) == "function" then
     function BattleState:bottomUIVisible(...)
       if floatingCommandsEnabled()
-          and self.dramaticShapeShot and not self.safari and not self.demo then
+          and battleShot(self) and not self.safari and not self.demo then
         return false
       end
       return baseBottomUIVisible(self, ...)
@@ -3705,8 +4103,8 @@ if not bottomHookInstalled then
   end
 end
 
-mod.exports.version = "0.7.2"
+mod.exports.version = "0.7.10"
 mod.exports.floatingHud = FloatingHud
 mod.exports.hostMode = hostMode
-mod.log:info("Floating Battle HUD 0.7.2 installed over %s %s (%s)",
+mod.log:info("Floating Battle HUD 0.7.10 installed over %s %s (%s)",
              tostring(hostId or "voxel host"), tostring(ds.version), tostring(hostMode))

@@ -1,11 +1,46 @@
-## v0.7.5
+## v0.7.10 — floating caught-Pokémon nickname prompt
 
-- Added **Useful Bag** compatibility. With FLOATING COMMANDS enabled, only the in-battle BagMenu bypasses Useful Bag's pocketed screen replacement and uses the engine's builtin BagMenu as the gameplay backend for the floating ITEM menu.
-- Useful Bag remains active everywhere else. Turning FLOATING COMMANDS off also returns in-battle Bag ownership to Useful Bag.
+- Replaces the previous v0.7.9 native AskName handoff: staged battles no longer reveal Gen1Recomp's intentional full-white `blankForAskName` field after a catch.
+- The native caught-Pokémon TextBox remains the source of truth for text, paging, typewriter timing and translated strings, but its pixels are hidden and projected through Floating Battle HUD's existing battle-message plate.
+- When that TextBox pushes its native ChoiceBox, the same floating YES / NO presentation is used; the engine's original callbacks still decide whether to open NamingScreen.
+- Only the visual blank is cancelled. Catch storage, Pokédex flow, nickname callbacks and NamingScreen remain engine-owned.
+- Useful Bag compatibility and Voxel Ascendant support from v0.7.8/v0.7.7 are unchanged.
 
-## v0.7.4
+## v0.7.9 — native caught-Pokémon nickname handoff
 
-- Added a platform-independent **HUD SCALE** option: `x0.8`, `x1` (default), `x1.5`, `x2`, `x2.5`, `x3`.
+- Floating Battle HUD now fully releases the battle bottom UI when Gen1Recomp enters its native `blankForAskName` state after a successful catch.
+- The white AskName screen, its TextBox, YES/NO prompt, and subsequent NamingScreen are left completely native instead of mixing Floating HUD message/choice pixels with the intentionally blank Gen I field.
+- The handoff is keyed to the engine's semantic `blankForAskName` flag rather than catch text, so the normal caught message and Pokédex flow can still use the floating presentation until AskName actually begins.
+- The v0.7.8 Useful Bag compatibility and v0.7.7 Voxel Ascendant support remain unchanged.
+
+## v0.7.8 — Useful Bag battle-item compatibility
+
+- Restored Useful Bag compatibility on top of the v0.7.7 Voxel Ascendant baseline.
+- Unlike the older v0.7.5 workaround, Useful Bag is no longer bypassed for battle screens.
+- Floating ITEM now sends the selected visible item directly through the concrete Bag state's final `onChoose` callback. This allows a POTION/medicine item to work even when Useful Bag currently projects another pocket into its native `items` list.
+- Party-target items keep the target-selection latch alive until the native `PartyMenu` is actually created, preserving the floating PKMN target picker on delayed/mobile screen pushes.
+- Poké Balls and non-target battle items clear the latch immediately and continue through their native Bag callbacks.
+- Dramatic Shape, PotatoVoxel and Voxel Ascendant remain on the v0.7.7 host integration paths.
+
+## v0.7.7 — experimental Voxel Ascendant support
+
+- Added Voxel Ascendant as a third supported voxel host alongside Dramatic Shape and PotatoVoxel.
+- Added a shared battle-shot adapter so every floating surface can consume either `dramaticShapeShot`, `voxelAscendantShot`, or the host's public `OverworldBattle.shot()` result.
+- Voxel Ascendant is detected explicitly before `snapHUDs`, preventing its compatibility `snapHUDs` export from being mistaken for the Dramatic Shape rendering path.
+- On Ascendant, the HUD uses the live `drawHudPanels` / `shot.canvas` seam, preserving the existing camera-relative scale, yaw/pitch perspective, PKMN/ITEM/YES-NO/move-learning flows, and the v0.7.6 SWITCH / STATS / CANCEL fix.
+- MAP and DISCS battle stages are supported through the same projected player/enemy anchors.
+- Voxel Ascendant on iOS intentionally falls back to the complete native battle UI for now, matching Ascendant's own cross-canvas safety policy.
+
+## v0.7.6
+
+- Fixed the invisible voluntary PKMN action submenu. Selecting a Pokémon during battle now renders the native **SWITCH / STATS / CANCEL** choices as a floating three-row selector.
+- The submenu keeps Gen1Recomp PartyMenu as the sole input/action authority; Floating Battle HUD only replaces its hidden pixels.
+- The selected action grows and the unselected actions shrink, matching the existing floating YES / NO visual language.
+- The submenu is drawn into the staged battle canvas with the PKMN panel, so it follows the same mobile-safe render path and HUD scale.
+
+## v0.7.3
+
+- Added a platform-independent **HUD SCALE** option: `x0.8`, `x1` (default), `x1.2`, `x1.4`, `x1.6`, `x1.8`, `x2`.
 - Replaced the old hard-coded mobile scale multiplier with the new global HUD scale setting.
 - Move-learning TextBox, YES/NO, and SELECT/FIGHT-replacement surfaces now render into the staged battle canvas, matching the mobile-safe PKMN/ITEM/FIGHT path.
 - Mandatory Pokémon replacement after a faint is claimed at PartyMenu construction time, so mobile no longer depends on the late `render.hud` fallback.
