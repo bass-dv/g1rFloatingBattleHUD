@@ -1,4 +1,4 @@
--- Floating Battle HUD v0.7.10
+-- Floating Battle HUD v0.7.17
 -- Companion mod for Dramatic Shape / PotatoVoxel / Voxel Ascendant staged battles.
 --
 -- v0.3 is the visual reset: the frosted cards are gone. The HUD is built
@@ -147,11 +147,10 @@ mod.options:define({
     choices = {
       { "x0.8", 0.8 },
       { "x1",   1.0 },
-      { "x1.2", 1.2 },
-      { "x1.4", 1.4 },
-      { "x1.6", 1.6 },
-      { "x1.8", 1.8 },
+      { "x1.5", 1.5 },
       { "x2",   2.0 },
+      { "x2.5", 2.5 },
+      { "x3",    3.0 },
     },
   },
   {
@@ -181,8 +180,8 @@ local function floatingCommandsEnabled()
 end
 
 local HUD_SCALE_CHOICES = {
-  [0.8] = true, [1.0] = true, [1.2] = true, [1.4] = true,
-  [1.6] = true, [1.8] = true, [2.0] = true,
+  [0.8] = true, [1.0] = true, [1.5] = true,
+  [2.0] = true, [2.5] = true, [3.0] = true,
 }
 
 local function floatingHudScale()
@@ -203,7 +202,7 @@ FloatingHud.SHADOW_PX = 2       -- shadow offset in final framebuffer pixels
 -- Expand the hard pixel shadow around its offset silhouette without moving it farther
 -- from the white HUD. 0 = original single copy; 1 is the recommended default; 2 is
 -- a chunkier outline if the HUD is being viewed at a large window scale.
-FloatingHud.SHADOW_GROW_PX = 1
+FloatingHud.SHADOW_GROW_PX = 3
 FloatingHud.MAX_SCALE = 3
 FloatingHud.MARGIN = 4
 
@@ -271,6 +270,20 @@ local MESSAGE_CURSOR_ASSET = "assets/hud/battle_message_cursor.png"
 local COMMAND_PLATE_ASSET = "assets/hud/battle_command_plate.png"
 local COMMAND_SELECTOR_ASSET = "assets/hud/battle_command_selector.png"
 local FIGHT_PLATE_ASSET = "assets/hud/fight_command_plate.png"
+local FIGHT_DIVIDER_ASSET = "assets/hud/fight_command_divider.png"
+local FIGHT_CATEGORY_ASSETS = {
+  -- The authored PHYSICAL/STATUS glyph files are intentionally crossed here:
+  -- the visual symbols in the supplied assets were opposite to their filenames.
+  PHYSICAL = "assets/hud/fight_kind_status.png",
+  SPECIAL  = "assets/hud/fight_kind_special.png",
+  STATUS   = "assets/hud/fight_kind_physical.png",
+}
+local TRAINER_BALL_ASSETS = {
+  alive    = "assets/hud/battleplate_ball.png",
+  active   = "assets/hud/battleplate_ball_active.png",
+  defeated = "assets/hud/battleplate_ball_defeated.png",
+  empty    = "assets/hud/battleplate_ball_empty.png",
+}
 -- Optional dedicated move-learning support. Until select_command_plate.png is
 -- authored, the renderer intentionally falls back to the normal FIGHT plate.
 local SELECT_PLATE_ASSET = "assets/hud/select_command_plate.png"
@@ -349,6 +362,17 @@ FloatingHud.LAYOUT = {
     -- Blue EXP rides on top of the battleplate's lower support line.
     expFill    = { x = 5.5, y = 41.9, w = 84.0, h = 2.5 },
   },
+}
+
+-- Trainer-only enemy party strip, projected as a small companion plane directly
+-- below the enemy battleplate. Six slots are always shown: active, healthy,
+-- defeated, and unused slots each have dedicated authored art.
+FloatingHud.TRAINER_TEAM = {
+  slots = 6,
+  gap = 1.75,
+  rowGap = 1.5,
+  scale = 1.0,
+  yOffset = -15.0,
 }
 
 -- The projected point supplied by Dramatic Shape is the Pokemon's FEET. This
@@ -471,46 +495,118 @@ FloatingHud.COMMAND = {
 FloatingHud.FIGHT = {
   xGap = 27.0,
   yOffset = 30.0,
+  -- Moves every dynamic FIGHT element together without moving the authored plate.
+  -- Negative = up, positive = down.
+  contentYOffset = -10.0,
 
-  -- Keep the authored FIGHT support at its original v0.6.0 size. Only the live
-  -- attack-list contents are enlarged inside it.
+  -- Extra transparent render room above the authored FIGHT plate. This expands
+  -- only the offscreen canvas, so descriptions can grow upward without clipping
+  -- while the plate keeps its exact projected position and scale.
+  canvasTopPad = 12.0,
+
+  -- The updated authored plate is wider/taller so the list can show PP totals
+  -- and a compact move-detail header without shrinking the main battle scene.
   scale = 1.0,
-  listScale = 1.14,
-  listAnchorX = 48.0,
-  listAnchorY = 13.0,
+  listScale = 1.07,
+  listAnchorX = 0.0,
+  listAnchorY = 0.0,
 
-  selectorX = 48.0,
-  selectorYOffset = -1.0,
-  typeX = 57.0,
-  typeYOffset = 1.0,
+  selectorX = 43.0,
+  selectorYOffset = 0.0,
+  typeX = 55.0,
+  typeYOffset = 0.0,
   typeW = 4.0,
   typeH = 7.0,
-  textX = 66.0,
-  firstY = 13.0,
-  rowStep = 22.0,
+  textX = 65.0,
+  ppRight = 216.0,
+  ppScale = 1.0,
+  ppYOffset = -1.0,
+  firstY = 49.0,
+  rowStep = 17.0,
+
+  -- Short divider from the revised mockup. It deliberately stops before the
+  -- numeric stat cluster instead of spanning the complete detail header.
+  dividerX = 55.0,
+  dividerY = 30.0,
+  dividerScale = 1.0,
+
+  -- Descriptions are left-anchored and bottom-anchored: one-line descriptions
+  -- sit close to the divider while longer text grows upward, as in the mockup.
+  descX = 54.0,
+  descBottomY = 13.0,
+  descWidth = 170.0,
+  descScale = 0.78,
+  descLineStep = 9.0,
+  descMaxLines = 3,
+
+  -- Accuracy is right-aligned immediately before the % glyph. The category icon
+  -- owns the middle slot and power grows rightward from a fixed left margin.
+  statsY = 25.0,
+  statsScale = 1.0,
+  statsAccPercentX = 225.0, -- NUMERO DE % >
+  statsAccGap = 1.0, -- ESPACIO DE % >
+  statsCategoryX = 158.0, -- CATEGORÍA
+  statsCategoryY = 24.0,
+  statsCategoryScale = 1.0,
+  statsPowerX = 170.0, -- NUMERO DE PODER
 }
 
--- Move-learning replacement picker. It deliberately starts as an exact geometry
--- clone of FIGHT so the flow is usable before the dedicated SELECT art exists.
+-- Move-learning replacement picker. It deliberately mirrors FIGHT so the same
+-- widened text/PP/details treatment also applies while choosing a move to forget.
 -- Drop assets/hud/select_command_plate.png into the mod later and it will be used
 -- automatically without changing code or the normal FIGHT plate.
 FloatingHud.LEARN = {
   xGap = 27.0,
   yOffset = 30.0,
-  scale = 1.0,
-  listScale = 1.14,
-  listAnchorX = 48.0,
-  listAnchorY = 13.0,
+  -- Moves every dynamic FIGHT element together without moving the authored plate.
+  -- Negative = up, positive = down.
+  contentYOffset = -5.0,
 
-  selectorX = 48.0,
-  selectorYOffset = -1.0,
-  typeX = 57.0,
-  typeYOffset = 1.0,
+  -- The updated authored plate is wider/taller so the list can show PP totals
+  -- and a compact move-detail header without shrinking the main battle scene.
+  scale = 1.0,
+  listScale = 1.0,
+  listAnchorX = 0.0,
+  listAnchorY = 0.0,
+
+  selectorX = 43.0,
+  selectorYOffset = 0.0,
+  typeX = 55.0,
+  typeYOffset = 0.0,
   typeW = 4.0,
   typeH = 7.0,
-  textX = 66.0,
-  firstY = 13.0,
-  rowStep = 22.0,
+  textX = 65.0,
+  ppRight = 216.0,
+  ppScale = 1.0,
+  ppYOffset = -1.0,
+  firstY = 49.0,
+  rowStep = 17.0,
+
+  -- Short divider from the revised mockup. It deliberately stops before the
+  -- numeric stat cluster instead of spanning the complete detail header.
+  dividerX = 55.0,
+  dividerY = 30.0,
+  dividerScale = 1.0,
+
+  -- Descriptions are left-anchored and bottom-anchored: one-line descriptions
+  -- sit close to the divider while longer text grows upward, as in the mockup.
+  descX = 54.0,
+  descBottomY = 13.0,
+  descWidth = 165.0,
+  descScale = 0.78,
+  descLineStep = 9.0,
+  descMaxLines = 3,
+
+  -- Accuracy is right-aligned immediately before the % glyph. The category icon
+  -- owns the middle slot and power grows rightward from a fixed left margin.
+  statsY = 25.0,
+  statsScale = 1.0,
+  statsAccPercentX = 207.0, -- NUMERO DE % >
+  statsAccGap = 1.0, -- ESPACIO DE % >
+  statsCategoryX = 136.0, -- CATEGORÍA
+  statsCategoryY = 24.0,
+  statsCategoryScale = 1.0,
+  statsPowerX = 148.0, -- NUMERO DE PODER
 }
 
 -- Battle-party overlay. The plate is authored at x8, while optional species icon
@@ -551,6 +647,9 @@ FloatingHud.ITEM = {
   selectorX = 55.0,
   selectorYOffset = -1.0,
   textX = 65.0,
+  quantityRight = 216.0,
+  quantityScale = 1.0,
+  quantityYOffset = -2.0,
   firstY = 7.0,
   rowStep = 12.5,
 
@@ -1453,11 +1552,12 @@ end
 
 local panelCanvases = {}
 
-local function panelCanvas(key, logicalW, logicalH)
+local function panelCanvas(key, logicalW, logicalH, topExtra)
   local pad = FloatingHud.CANVAS_PAD or 0
+  topExtra = math.max(0, tonumber(topExtra) or 0)
   local raster = math.max(1, tonumber(FloatingHud.CANVAS_RENDER_SCALE) or 1)
   local logicalCW = logicalW + pad * 2
-  local logicalCH = logicalH + pad * 2
+  local logicalCH = logicalH + pad * 2 + topExtra
   local cw = math.ceil(logicalCW * raster)
   local ch = math.ceil(logicalCH * raster)
   local canvas = panelCanvases[key]
@@ -1769,19 +1869,475 @@ local function renderCommandCanvas(battle, k, logicalW, logicalH)
   return canvas, logicalCW, logicalCH
 end
 
+local SPECIAL_MOVE_TYPES = {
+  FIRE = true,
+  WATER = true,
+  GRASS = true,
+  ELECTRIC = true,
+  ICE = true,
+  PSYCHIC = true,
+  DRAGON = true,
+}
+
+local function moveMaxPPValues(battle, move)
+  local def = moveDefinition(battle, move)
+  local cur = type(move) == "table"
+    and (tonumber(move.pp) or tonumber(move.currentPP) or tonumber(move.currentPp))
+    or nil
+  local maxpp = type(move) == "table"
+    and (tonumber(move.maxPP) or tonumber(move.maxPp))
+    or nil
+  if maxpp == nil then maxpp = def and tonumber(def.pp) or cur or 0 end
+  if cur == nil then cur = maxpp or 0 end
+  return math.max(0, math.floor((cur or 0) + 0.5)),
+         math.max(0, math.floor((maxpp or 0) + 0.5))
+end
+
+-- Gen1Recomp builds its vanilla move records directly from the ROM, so those
+-- records intentionally contain mechanics (effect/power/type/accuracy/PP) but
+-- no prose description. Keep authored/custom descriptions first, then provide a
+-- compact RBY fallback using Smogon's RB move wording/semantics.
+local SMOGON_RB_MOVE_DESCRIPTIONS = {
+  BIDE = "Waits 2-3 turns; deals double the damage taken.",
+  CONVERSION = "User becomes the same type as the target.",
+  FOCUS_ENERGY = "Quarters the user's chance for a critical hit.",
+  HAZE = "Resets all stat changes. Removes foe's status.",
+  LIGHT_SCREEN = "While active, user's Special is 2x when damaged.",
+  MIRROR_MOVE = "User uses the target's last used move against it.",
+  MIST = "While active, user is protected from stat drops.",
+  REFLECT = "While active, the user's Defense is doubled.",
+  REST = "User sleeps 2 turns and restores HP and status.",
+  SPLASH = "No competitive use.",
+  SUBSTITUTE = "User takes 1/4 its max HP to put in a Substitute.",
+  TOXIC = "Badly poisons the target.",
+  SWIFT = "Never misses, even against Dig and Fly.",
+  TRANSFORM = "Copies target's stats, moves, types, and species.",
+
+  COUNTER = "If hit by Normal/Fighting move, deals 2x damage.",
+  DRAGON_RAGE = "Deals 40 HP of damage to the target.",
+  NIGHT_SHADE = "Damage = user's level. Can hit Normal types.",
+  PSYWAVE = "Random damage from 1 to (user's level*1.5 - 1).",
+  SEISMIC_TOSS = "Damage = user's level. Can hit Ghost types.",
+  SONICBOOM = "Deals 20 HP of damage to the target.",
+  SUPER_FANG = "Deals damage equal to half the target's current HP.",
+
+  DOUBLE_KICK = "Hits 2 times.",
+  TWINEEDLE = "Hits 2 times. Last hit has 20% chance to poison.",
+  FLY = "Flies up on first turn, attacks on second.",
+  DIG = "Digs underground turn 1, strikes turn 2.",
+  RAZOR_WIND = "Charges turn 1. Hits turn 2.",
+  SKULL_BASH = "Charges turn 1. Hits turn 2.",
+  SOLARBEAM = "Charges turn 1. Hits turn 2.",
+
+  HYPER_BEAM = "Can't move next turn if target or sub is not KOed.",
+  RAGE = "Lasts forever. Raises user's Attack by 1 when hit.",
+  MIMIC = "Random move known by the target replaces this.",
+  METRONOME = "Picks a random move.",
+  LEECH_SEED = "1/16 of target's HP is restored to user every turn.",
+  DISABLE = "For 0-7 turns, disables one of the target's moves.",
+  DREAM_EATER = "User gains 1/2 HP inflicted. Sleeping target only.",
+  PAY_DAY = "Scatters coins.",
+  ROAR = "In battles, the opponent switches. In the wild, the Pokémon runs.",
+  TELEPORT = "No competitive use.",
+  WHIRLWIND = "No competitive use.",
+}
+
+local SMOGON_RB_EFFECT_DESCRIPTIONS = {
+  DRAIN_HP_EFFECT = "User recovers 50% of the damage dealt.",
+  BURN_SIDE_EFFECT1 = "10% chance to burn the target.",
+  FREEZE_SIDE_EFFECT1 = "10% chance to freeze the target.",
+  PARALYZE_SIDE_EFFECT1 = "10% chance to paralyze the target.",
+  POISON_SIDE_EFFECT1 = "20% chance to poison the target.",
+  EXPLODE_EFFECT = "Target's Def halved during damage. User faints.",
+  DREAM_EATER_EFFECT = "User gains 1/2 HP inflicted. Sleeping target only.",
+  MIRROR_MOVE_EFFECT = "User uses the target's last used move against it.",
+
+  ATTACK_UP1_EFFECT = "Raises the user's Attack by 1.",
+  DEFENSE_UP1_EFFECT = "Raises the user's Defense by 1.",
+  SPEED_UP1_EFFECT = "Raises the user's Speed by 1.",
+  SPECIAL_UP1_EFFECT = "Raises the user's Special by 1.",
+  ACCURACY_UP1_EFFECT = "Raises the user's accuracy by 1.",
+  EVASION_UP1_EFFECT = "Raises the user's evasiveness by 1.",
+  ATTACK_DOWN1_EFFECT = "Lowers the target's Attack by 1.",
+  DEFENSE_DOWN1_EFFECT = "Lowers the target's Defense by 1.",
+  SPEED_DOWN1_EFFECT = "Lowers the target's Speed by 1.",
+  SPECIAL_DOWN1_EFFECT = "Lowers the target's Special by 1.",
+  ACCURACY_DOWN1_EFFECT = "Lowers the target's accuracy by 1.",
+  EVASION_DOWN1_EFFECT = "Lowers the target's evasiveness by 1.",
+
+  ATTACK_UP2_EFFECT = "Raises the user's Attack by 2.",
+  DEFENSE_UP2_EFFECT = "Raises the user's Defense by 2.",
+  SPEED_UP2_EFFECT = "Raises the user's Speed by 2.",
+  SPECIAL_UP2_EFFECT = "Raises the user's Special by 2.",
+  ACCURACY_UP2_EFFECT = "Raises the user's accuracy by 2.",
+  EVASION_UP2_EFFECT = "Raises the user's evasiveness by 2.",
+  ATTACK_DOWN2_EFFECT = "Lowers the target's Attack by 2.",
+  DEFENSE_DOWN2_EFFECT = "Lowers the target's Defense by 2.",
+  SPEED_DOWN2_EFFECT = "Lowers the target's Speed by 2.",
+  SPECIAL_DOWN2_EFFECT = "Lowers the target's Special by 2.",
+  ACCURACY_DOWN2_EFFECT = "Lowers the target's accuracy by 2.",
+  EVASION_DOWN2_EFFECT = "Lowers the target's evasiveness by 2.",
+
+  BIDE_EFFECT = "Waits 2-3 turns; deals double the damage taken.",
+  THRASH_PETAL_DANCE_EFFECT = "Lasts 3-4 turns. Confuses the user afterwards.",
+  SWITCH_AND_TELEPORT_EFFECT = "No competitive use.",
+  TWO_TO_FIVE_ATTACKS_EFFECT = "Hits 2-5 times in one turn.",
+  FLINCH_SIDE_EFFECT1 = "10% chance to make the target flinch.",
+  SLEEP_EFFECT = "Causes the target to fall asleep.",
+  POISON_SIDE_EFFECT2 = "40% chance to poison the target.",
+  BURN_SIDE_EFFECT2 = "30% chance to burn the target.",
+  PARALYZE_SIDE_EFFECT2 = "30% chance to paralyze the target.",
+  FLINCH_SIDE_EFFECT2 = "30% chance to make the target flinch.",
+  OHKO_EFFECT = "Deals 65535 damage. Fails if target is faster.",
+  CHARGE_EFFECT = "Charges turn 1. Hits turn 2.",
+  TRAPPING_EFFECT = "Prevents the target from moving for 2-5 turns.",
+  ATTACK_TWICE_EFFECT = "Hits 2 times.",
+  JUMP_KICK_EFFECT = "User takes 1 HP of damage if it misses.",
+  MIST_EFFECT = "While active, user is protected from stat drops.",
+  FOCUS_ENERGY_EFFECT = "Quarters the user's chance for a critical hit.",
+  RECOIL_EFFECT = "Has 1/4 recoil.",
+  CONFUSION_EFFECT = "Confuses the target.",
+  HEAL_EFFECT = "Heals the user by 50% of its max HP.",
+  TRANSFORM_EFFECT = "Copies target's stats, moves, types, and species.",
+  LIGHT_SCREEN_EFFECT = "While active, user's Special is 2x when damaged.",
+  REFLECT_EFFECT = "While active, the user's Defense is doubled.",
+  POISON_EFFECT = "Poisons the target.",
+  PARALYZE_EFFECT = "Paralyzes the target.",
+  ATTACK_DOWN_SIDE_EFFECT = "33% chance to lower the target's Attack by 1.",
+  DEFENSE_DOWN_SIDE_EFFECT = "33% chance to lower the target's Defense by 1.",
+  SPEED_DOWN_SIDE_EFFECT = "33% chance to lower the target's Speed by 1.",
+  SPECIAL_DOWN_SIDE_EFFECT = "33% chance to lower the target's Special by 1.",
+  CONFUSION_SIDE_EFFECT = "10% chance to confuse the target.",
+  TWINEEDLE_EFFECT = "Hits 2 times. Last hit has 20% chance to poison.",
+  SUBSTITUTE_EFFECT = "User takes 1/4 its max HP to put in a Substitute.",
+  HYPER_BEAM_EFFECT = "Can't move next turn if target or sub is not KOed.",
+  RAGE_EFFECT = "Lasts forever. Raises user's Attack by 1 when hit.",
+  MIMIC_EFFECT = "Random move known by the target replaces this.",
+  METRONOME_EFFECT = "Picks a random move.",
+  LEECH_SEED_EFFECT = "1/16 of target's HP is restored to user every turn.",
+  SPLASH_EFFECT = "No competitive use.",
+  DISABLE_EFFECT = "For 0-7 turns, disables one of the target's moves.",
+}
+
+local function moveIdKey(move)
+  local id = type(move) == "table" and (move.id or move.moveId or move.move) or move
+  return tostring(id or ""):upper()
+end
+
+local function moveDescriptionText(battle, move)
+  local def = moveDefinition(battle, move)
+  local desc = def and (def.description or def.desc or def.shortDesc or def.effectDesc) or ""
+  desc = tostring(desc or "")
+  desc = desc:gsub("\r\n", "\n"):gsub("\r", "\n")
+  desc = desc:gsub("%s*\n+%s*", " ")
+  desc = desc:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+
+  if desc == "" then
+    local id = moveIdKey(move)
+    desc = SMOGON_RB_MOVE_DESCRIPTIONS[id] or ""
+    if desc == "" and def then
+      local effect = tostring(def.effect or ""):upper()
+      desc = SMOGON_RB_EFFECT_DESCRIPTIONS[effect] or ""
+    end
+    if desc == "" and def and def.highCrit then
+      desc = "High critical hit ratio."
+    end
+  end
+
+  local lowered = desc:lower()
+  if lowered == "no additional effect." or lowered == "no additional effect" then
+    return ""
+  end
+  return desc
+end
+
+local function movePowerValue(battle, move)
+  local def = moveDefinition(battle, move)
+  local value = def and tonumber(def.power) or nil
+  if not value or value <= 0 then return nil end
+  return math.floor(value + 0.5)
+end
+
+local function moveAccuracyValue(battle, move)
+  local def = moveDefinition(battle, move)
+  local value = def and tonumber(def.accuracy) or nil
+  if not value or value <= 0 then return nil end
+  if value > 100 and value <= 255 then
+    value = (value / 255) * 100
+  end
+  return clamp(math.floor(value + 0.5), 1, 100)
+end
+
+local function moveCategoryKey(battle, move)
+  local def = moveDefinition(battle, move)
+  local raw = def and (def.category or def.damageClass or def.damageCategory
+      or def.class or def.kind) or nil
+  if type(raw) == "table" then raw = raw.name or raw.id end
+  raw = tostring(raw or ""):upper():gsub("[%s_%-]+", "")
+  if raw == "STATUS" or raw == "NONDAMAGING" or raw == "EFFECT"
+      or raw == "UTILITY" or raw == "SUPPORT" then
+    return "STATUS"
+  end
+  if raw == "PHYSICAL" or raw == "PHYS" then return "PHYSICAL" end
+  if raw == "SPECIAL" or raw == "SPEC" or raw == "SP" then return "SPECIAL" end
+
+  if not movePowerValue(battle, move) then return "STATUS" end
+  return SPECIAL_MOVE_TYPES[moveTypeKey(battle, move)] and "SPECIAL" or "PHYSICAL"
+end
+
+-- The Gen-I ROM font intentionally lacks a percent glyph. Keep using that font
+-- for the visual language of the HUD, but reserve one 8px cell for every `%` so
+-- descriptions containing probabilities wrap exactly as they will be rendered.
+local function inlineHudTextWidth(text)
+  text = tostring(text or "")
+  local total = 0
+  local pos = 1
+  while true do
+    local at = text:find("%", pos, true)
+    if not at then
+      total = total + textWidth(text:sub(pos))
+      break
+    end
+    total = total + textWidth(text:sub(pos, at - 1)) + 8
+    pos = at + 1
+  end
+  return total
+end
+
+local function wrapHudText(text, maxWidth, extraScale, maxLines)
+  text = tostring(text or "")
+  text = text:gsub("\r\n", "\n"):gsub("\r", "\n")
+  local out = {}
+  local scale = math.max(0.1, tonumber(extraScale) or 1)
+
+  local function appendLine(line)
+    if line ~= "" then
+      out[#out + 1] = line
+    end
+    return maxLines and #out >= maxLines
+  end
+
+  for paragraph in text:gmatch("[^\n]+") do
+    local line = ""
+    for word in paragraph:gmatch("%S+") do
+      local candidate = (line == "") and word or (line .. " " .. word)
+      if line == "" or inlineHudTextWidth(candidate) * scale <= maxWidth then
+        if inlineHudTextWidth(candidate) * scale <= maxWidth then
+          line = candidate
+        else
+          local piece = ""
+          for ch in word:gmatch(".") do
+            local joined = piece .. ch
+            if piece ~= "" and inlineHudTextWidth(joined) * scale > maxWidth then
+              if appendLine(piece) then return out end
+              piece = ch
+            else
+              piece = joined
+            end
+          end
+          line = piece
+        end
+      else
+        if appendLine(line) then return out end
+        line = word
+      end
+    end
+    if appendLine(line) then return out end
+  end
+
+  return out
+end
+
+local function drawPercentGlyph(x, y, k, scale)
+  scale = math.max(0.5, tonumber(scale) or 1)
+  local px = math.max(0.75, scale)
+  local dots = {
+    {0, 0}, {1, 0}, {0, 1}, {1, 1},
+    {5, 5}, {6, 5}, {5, 6}, {6, 6},
+    {5, 0}, {4, 1}, {3, 2}, {3, 3}, {2, 4}, {1, 5}, {0, 6},
+  }
+
+  local function drawAt(ox, oy, r, gg, b)
+    g.setColor(r, gg, b, 1)
+    for _, pt in ipairs(dots) do
+      g.rectangle("fill",
+                  x + ox + pt[1] * px,
+                  y + oy + pt[2] * px,
+                  px, px)
+    end
+  end
+
+  eachShadowOffset(k, scale, function(sx, sy)
+    drawAt(sx, sy, 0, 0, 0)
+  end)
+  drawAt(0, 0, 1, 1, 1)
+end
+
+
+-- Draw normal Gen-I glyphs and splice the custom percent sign inline. This makes
+-- `%` reusable in every Smogon description instead of special-casing accuracy.
+local function drawShadowInlineText(text, x, y, k, extraScale)
+  text = tostring(text or "")
+  extraScale = math.max(0.25, tonumber(extraScale) or 1)
+  local cursor = x
+  local pos = 1
+
+  while true do
+    local at = text:find("%", pos, true)
+    local chunk = at and text:sub(pos, at - 1) or text:sub(pos)
+    if chunk ~= "" then
+      drawShadowText(chunk, cursor, y, k, extraScale)
+      cursor = cursor + textWidth(chunk) * extraScale
+    end
+    if not at then break end
+
+    drawPercentGlyph(cursor + 0.5 * extraScale,
+                     y + 0.5 * extraScale,
+                     k,
+                     0.72 * extraScale)
+    cursor = cursor + 8 * extraScale
+    pos = at + 1
+  end
+end
+
+local function drawFightMoveHeader(layout, battle, move, k)
+  local contentY = tonumber(layout.contentYOffset) or 0
+  local divider = assetImage(FIGHT_DIVIDER_ASSET)
+  if divider then
+    drawShadowAsset(divider,
+                    layout.dividerX or 55,
+                    (layout.dividerY or 40) + contentY,
+                    k,
+                    FloatingHud.ASSET_SCALE * math.max(0.25, layout.dividerScale or 1))
+  end
+
+  local desc = moveDescriptionText(battle, move)
+  local descScale = math.max(0.25, tonumber(layout.descScale) or 1)
+  local descLines = wrapHudText(desc,
+                                tonumber(layout.descWidth) or 184,
+                                descScale,
+                                tonumber(layout.descMaxLines) or 3)
+  local lineStep = tonumber(layout.descLineStep) or (8 * descScale + 1)
+  local bottomY = (tonumber(layout.descBottomY) or 23) + contentY
+  local descX = tonumber(layout.descX) or 57
+  local startY = bottomY - math.max(0, #descLines - 1) * lineStep
+  for i = 1, #descLines do
+    drawShadowInlineText(descLines[i], descX, startY + (i - 1) * lineStep,
+                         k, descScale)
+  end
+
+  local statsScale = math.max(0.25, tonumber(layout.statsScale) or 1)
+  local statsY = (tonumber(layout.statsY) or 35) + contentY
+  local accuracy = moveAccuracyValue(battle, move)
+  if accuracy then
+    local accText = tostring(accuracy)
+    local percentX = tonumber(layout.statsAccPercentX) or 184
+    local gap = tonumber(layout.statsAccGap) or 1
+    local accW = textWidth(accText) * statsScale
+    -- Number grows LEFT toward the divider; the percent sign remains pinned.
+    drawShadowText(accText,
+                   percentX - gap * statsScale - accW,
+                   statsY,
+                   k,
+                   statsScale)
+    drawPercentGlyph(percentX,
+                     statsY + 1 * statsScale,
+                     k,
+                     0.72 * statsScale)
+  end
+
+  local category = moveCategoryKey(battle, move)
+  local categoryImage = assetImage(FIGHT_CATEGORY_ASSETS[category] or "")
+  if categoryImage then
+    drawShadowAsset(categoryImage,
+                    tonumber(layout.statsCategoryX) or 194,
+                    (tonumber(layout.statsCategoryY) or 31) + contentY,
+                    k,
+                    FloatingHud.ASSET_SCALE * math.max(0.25, layout.statsCategoryScale or 1))
+  else
+    local label = (category == "PHYSICAL" and "PHY")
+               or (category == "SPECIAL" and "SPC")
+               or "STS"
+    drawShadowTextCentered(label,
+                           (tonumber(layout.statsCategoryX) or 194) + 5,
+                           statsY,
+                           k,
+                           0.8)
+  end
+
+  local power = movePowerValue(battle, move)
+  if power then
+    local powerText = tostring(power)
+    -- Power grows RIGHT from a fixed left edge just after the category icon.
+    drawShadowText(powerText,
+                   tonumber(layout.statsPowerX) or 207,
+                   statsY,
+                   k,
+                   statsScale)
+  end
+end
+
+local function drawFightMoveRows(layout, battle, moves, count, selected, selector, k)
+  local contentY = tonumber(layout.contentYOffset) or 0
+  local listScale = math.max(0.5, tonumber(layout.listScale) or 1)
+  local anchorX = tonumber(layout.listAnchorX) or 0
+  local anchorY = tonumber(layout.listAnchorY) or 0
+  local function sx(value)
+    return anchorX + ((tonumber(value) or anchorX) - anchorX) * listScale
+  end
+
+  for i = 1, count do
+    local move = moves[i]
+    local y = (tonumber(layout.firstY) or 49) + contentY
+            + (i - 1) * (tonumber(layout.rowStep) or 17) * listScale
+    if move then
+      if i == selected then
+        drawShadowAsset(selector,
+                        sx(layout.selectorX or 43),
+                        y + (layout.selectorYOffset or 0) * listScale,
+                        k,
+                        FloatingHud.ASSET_SCALE * listScale)
+      end
+
+      local color = moveTypeColor(battle, move)
+      g.setColor(color[1], color[2], color[3], color[4] or 1)
+      g.rectangle("fill",
+                  sx(layout.typeX or 55),
+                  y + (layout.typeYOffset or 1) * listScale,
+                  (layout.typeW or 4) * listScale,
+                  (layout.typeH or 14) * listScale)
+
+      drawShadowText(moveDisplayName(battle, move),
+                     sx(layout.textX or 65), y, k, listScale)
+
+      local curPP, maxPP = moveMaxPPValues(battle, move)
+      local ppText = string.format("%d/%d", curPP, maxPP)
+      local ppScale = math.max(0.5, tonumber(layout.ppScale) or listScale)
+      local ppRight = sx(layout.ppRight or 211)
+      drawShadowText(ppText,
+                     ppRight - textWidth(ppText) * ppScale,
+                     y + (layout.ppYOffset or 0) * listScale,
+                     k,
+                     ppScale)
+    end
+  end
+end
+
 local function renderFightCanvas(battle, k, logicalW, logicalH)
   local plate = assetImage(FIGHT_PLATE_ASSET)
   local selector = assetImage(COMMAND_SELECTOR_ASSET)
   if not (plate and selector and battle and battle.player) then return nil end
 
+  local topPad = math.max(0, tonumber(FloatingHud.FIGHT.canvasTopPad) or 0)
   local canvas, cw, ch, pad, raster, logicalCW, logicalCH =
-    panelCanvas("fight", logicalW, logicalH)
+    panelCanvas("fight", logicalW, logicalH, topPad)
   if not canvas then return nil end
 
   local layout = FloatingHud.FIGHT
   local moves = battle.player.curMoves or {}
+  local count = math.min(4, #moves)
   local selected = clamp(math.floor(tonumber(battle.moveIndex) or 1), 1,
-                         math.max(1, math.min(4, #moves)))
+                         math.max(1, count))
   local prevCanvas = g.getCanvas()
   local prevBlend, prevAlpha = g.getBlendMode()
   local prevShader = g.getShader()
@@ -1795,42 +2351,12 @@ local function renderFightCanvas(battle, k, logicalW, logicalH)
     g.setColor(1, 1, 1, 1)
     g.push()
     g.scale(raster, raster)
-    g.translate(pad, pad)
+    g.translate(pad, pad + topPad)
 
     drawShadowAsset(plate, 0, 0, k, FloatingHud.ASSET_SCALE)
-
-    -- Enlarge only the attack list, not the authored vertical FIGHT support.
-    -- Every live element grows away from one shared top-left anchor so selector,
-    -- type chip, text and row spacing keep their relative alignment.
-    local listScale = math.max(0.5, tonumber(layout.listScale) or 1)
-    local anchorX = tonumber(layout.listAnchorX) or (layout.selectorX or 48)
-    local anchorY = tonumber(layout.listAnchorY) or (layout.firstY or 13)
-    local function sx(value)
-      return anchorX + ((tonumber(value) or anchorX) - anchorX) * listScale
-    end
-
-    for i = 1, 4 do
-      local move = moves[i]
-      local y = anchorY + (i - 1) * (layout.rowStep or 22) * listScale
-      if move then
-        if i == selected then
-          drawShadowAsset(selector,
-                          sx(layout.selectorX or 48),
-                          y + (layout.selectorYOffset or -1) * listScale,
-                          k, FloatingHud.ASSET_SCALE * listScale)
-        end
-
-        local color = moveTypeColor(battle, move)
-        g.setColor(color[1], color[2], color[3], color[4] or 1)
-        g.rectangle("fill",
-                    sx(layout.typeX or 57),
-                    y + (layout.typeYOffset or 1) * listScale,
-                    (layout.typeW or 4) * listScale,
-                    (layout.typeH or 7) * listScale)
-
-        drawShadowText(moveDisplayName(battle, move),
-                       sx(layout.textX or 66), y, k, listScale)
-      end
+    if count > 0 then
+      drawFightMoveHeader(layout, battle, moves[selected], k)
+      drawFightMoveRows(layout, battle, moves, count, selected, selector, k)
     end
 
     g.pop()
@@ -1874,34 +2400,9 @@ local function renderLearnCanvas(menu, battle, k, logicalW, logicalH)
     g.translate(pad, pad)
 
     drawShadowAsset(plate, 0, 0, k, FloatingHud.ASSET_SCALE)
-
-    local listScale = math.max(0.5, tonumber(layout.listScale) or 1)
-    local anchorX = tonumber(layout.listAnchorX) or (layout.selectorX or 48)
-    local anchorY = tonumber(layout.listAnchorY) or (layout.firstY or 13)
-    local function sx(value)
-      return anchorX + ((tonumber(value) or anchorX) - anchorX) * listScale
-    end
-
-    for i = 1, count do
-      local move = moves[i]
-      local y = anchorY + (i - 1) * (layout.rowStep or 22) * listScale
-      if i == selected then
-        drawShadowAsset(selector,
-                        sx(layout.selectorX or 48),
-                        y + (layout.selectorYOffset or -1) * listScale,
-                        k, FloatingHud.ASSET_SCALE * listScale)
-      end
-
-      local color = moveTypeColor(battle, move)
-      g.setColor(color[1], color[2], color[3], color[4] or 1)
-      g.rectangle("fill",
-                  sx(layout.typeX or 57),
-                  y + (layout.typeYOffset or 1) * listScale,
-                  (layout.typeW or 4) * listScale,
-                  (layout.typeH or 7) * listScale)
-
-      drawShadowText(moveDisplayName(battle, move),
-                     sx(layout.textX or 66), y, k, listScale)
+    if count > 0 then
+      drawFightMoveHeader(layout, battle, moves[selected], k)
+      drawFightMoveRows(layout, battle, moves, count, selected, selector, k)
     end
 
     g.pop()
@@ -2082,6 +2583,18 @@ local function renderItemCanvas(menu, battle, k, logicalW, logicalH)
                             k, FloatingHud.ASSET_SCALE)
           end
           drawShadowText(row.label, layout.textX or 65, y, k)
+          local count = math.max(0, math.floor((tonumber(row.count) or 0) + 0.5))
+          if count >= 2 then
+            local quantityText = "x" .. tostring(count)
+            local quantityScale = math.max(0.5,
+              tonumber(layout.quantityScale) or 1)
+            local quantityRight = tonumber(layout.quantityRight) or 216
+            drawShadowText(quantityText,
+                           quantityRight - textWidth(quantityText) * quantityScale,
+                           y + (tonumber(layout.quantityYOffset) or 0),
+                           k,
+                           quantityScale)
+          end
         end
       end
     end
@@ -2215,6 +2728,88 @@ local function drawPerspectiveCanvas(canvas, cx, cy, w, h, signal, roll, side,
   g.draw(mesh, cx, cy)
 end
 
+local function trainerTeamAssetState(battle, slot)
+  local party = battle and battle.enemyParty
+  local mon = party and party[slot] or nil
+  if not mon then return "empty" end
+  if slot == tonumber(battle.enemyIndex) and (tonumber(mon.hp) or 0) > 0 then
+    return "active"
+  end
+  if (tonumber(mon.hp) or 0) > 0 then return "alive" end
+  return "defeated"
+end
+
+local function renderTrainerTeamCanvas(battle, k)
+  if not (battle and battle.kind == "trainer" and type(battle.enemyParty) == "table") then
+    return nil
+  end
+  local cfg = FloatingHud.TRAINER_TEAM or {}
+  local slots = math.max(1, math.min(6, math.floor(tonumber(cfg.slots) or 6)))
+  local img = assetImage(TRAINER_BALL_ASSETS.alive)
+  if not img then return nil end
+  local iw, ih = img:getDimensions()
+  local iconScale = FloatingHud.ASSET_SCALE * math.max(0.25, tonumber(cfg.scale) or 1)
+  local iconW = iw * iconScale
+  local iconH = ih * iconScale
+  local gap = tonumber(cfg.gap) or 1.75
+  local logicalW = slots * iconW + math.max(0, slots - 1) * gap
+  local logicalH = iconH
+
+  local canvas, cw, ch, pad, raster, logicalCW, logicalCH =
+    panelCanvas("trainer_team", logicalW, logicalH)
+  if not canvas then return nil end
+
+  local prevCanvas = g.getCanvas()
+  local prevBlend, prevAlpha = g.getBlendMode()
+  local prevShader = g.getShader()
+  local ok, err = pcall(function()
+    g.setCanvas(canvas)
+    g.origin()
+    g.clear(0, 0, 0, 0)
+    g.setBlendMode("alpha")
+    g.setShader()
+    g.setColor(1, 1, 1, 1)
+    g.push()
+    g.scale(raster, raster)
+    g.translate(pad, pad)
+
+    for i = 1, slots do
+      local state = trainerTeamAssetState(battle, i)
+      local ball = assetImage(TRAINER_BALL_ASSETS[state])
+      if ball then
+        local x = (i - 1) * (iconW + gap)
+        drawShadowAsset(ball, x, 0, k, iconScale, true)
+      end
+    end
+
+    g.pop()
+  end)
+
+  g.setShader(prevShader)
+  if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
+  g.setBlendMode(prevBlend or "alpha", prevAlpha)
+  g.setColor(1, 1, 1, 1)
+  if not ok then error(err, 0) end
+  return canvas, logicalCW, logicalCH, logicalW, logicalH
+end
+
+local function drawTrainerTeamRow(battle, shot, enemyRect, k)
+  if not (battle and battle.kind == "trainer" and enemyRect) then return false end
+  local canvas, cw, ch, rowW, rowH = renderTrainerTeamCanvas(battle, k)
+  if not canvas then return false end
+
+  local cfg = FloatingHud.TRAINER_TEAM or {}
+  local rowGap = tonumber(cfg.rowGap) or 1.5
+  local yOffset = tonumber(cfg.yOffset) or 0
+  local cx = enemyRect[1] + enemyRect[3] * 0.5
+  local visualTop = enemyRect[2] + enemyRect[4] + (rowGap + yOffset) * k
+  local cy = visualTop + rowH * k * 0.5
+
+  drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k,
+                        cameraYawSignal(), hudRotation(), "enemy")
+  return true
+end
+
 local function drawCard(battle, shot, side, battler)
   if not (battler and battler.mon) then return false end
   local rect, k, logicalW, logicalH = worldRectFor(shot, side)
@@ -2232,6 +2827,9 @@ local function drawCard(battle, shot, side, battler)
   -- Canvas padding is transparent and symmetric, so it can be included in the
   -- projected plane without changing the HUD's visual centre.
   drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k, signal, roll, side)
+  if side == "enemy" then
+    drawTrainerTeamRow(battle, shot, rect, k)
+  end
   return true
 end
 
@@ -2482,7 +3080,8 @@ local function drawFightPanel(battle, shot)
   if not canvas then return false end
 
   local cx = rect[1] + rect[3] * 0.5
-  local cy = rect[2] + rect[4] * 0.5
+  local topPad = math.max(0, tonumber(FloatingHud.FIGHT.canvasTopPad) or 0)
+  local cy = rect[2] + rect[4] * 0.5 - topPad * k * 0.5
   drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k,
                         cameraYawSignal(), hudRotation(), "fight")
   return true
@@ -2800,8 +3399,11 @@ local function drawFloatingSceneUI(battle, shot, includeTextGlass)
     end
 
     -- Dramatic Shape's frosted donor panel remains useful for battle phases we
-    -- have not replaced yet. Never lay it behind our new message/command art.
-    if includeTextGlass and not bottomKind then
+    -- have not replaced yet. During the opening party-ball window it is only a
+    -- translucent copy of Gen1's empty text box: the authoritative introText is
+    -- queued immediately afterwards and drawMessagePanel projects that text
+    -- through our own plate. Do not leave the donor rectangle underneath it.
+    if includeTextGlass and not bottomKind and not battle.introBalls then
       drawTextGlass(battle, shot)
     end
   end)
@@ -2843,9 +3445,16 @@ elseif isAscendantHost and type(OverworldBattle.drawHudPanels) == "function" the
     if not battle then return baseDrawHudPanels(battle) end
     battle._floatingBattleHudPanelDrawn = false
     local shot = battleShot(battle)
-    local statusDrawn = drawFloatingSceneUI(battle, shot, false)
+    local statusDrawn, bottomDrawn = drawFloatingSceneUI(battle, shot, false)
     if statusDrawn then
       battle._floatingBattleHudPanelDrawn = true
+    end
+    -- Before introText becomes the current queue item there is intentionally no
+    -- custom message to paint. Still claim the panel host for that short
+    -- introBalls window so its empty translucent native rectangle cannot leak.
+    if statusDrawn or bottomDrawn
+        or (floatingCommandsEnabled() and battle.introBalls
+            and supportedFloatingLayout(battle)) then
       return
     end
     return baseDrawHudPanels(battle)
@@ -2939,11 +3548,45 @@ elseif type(OverworldBattle.snapHUDs) == "function" then
       return nativeUp or true
     end
 
-    if statusDrawn or bottomDrawn then return true end
+    -- introBalls begins before the trainer-challenge message becomes current.
+    -- Claim that silent lead-in too; otherwise baseSnapHUDs reconstructs the
+    -- empty frosted text rectangle we deliberately withheld above.
+    if statusDrawn or bottomDrawn
+        or (wantCommands and battle.introBalls
+            and supportedFloatingLayout(battle)) then
+      return true
+    end
     return baseSnapHUDs(battle, shot)
   end
 
   OverworldBattle.snapHUDs = FloatingHud.snapHUDs
+
+  -- Gen1Recomp draws the temporary trainer/player Poké Ball rows inside
+  -- BattleState:drawHUDs, independently of the lower-UI visibility predicate.
+  -- Keep the method alive for renderer lifecycle compatibility, but hide only
+  -- its pixels while this normal staged battle owns the floating status HUD.
+  -- This is deliberately BattleState-scoped: overworld TextBox rendering never
+  -- passes through this seam.
+  local DRAW_KEY = "_floatingBattleHudBaseDrawHUDs"
+  if not BattleState[DRAW_KEY] then BattleState[DRAW_KEY] = BattleState.drawHUDs end
+  local baseDrawHUDs = BattleState[DRAW_KEY]
+  if type(baseDrawHUDs) == "function" then
+    function BattleState:drawHUDs(...)
+      local owns = floatingStatusHudEnabled()
+                   and battleShot(self)
+                   and plateImage("enemy") and plateImage("player")
+                   and not self.safari and not self.demo
+      if owns then
+        g.push("all")
+        g.setScissor(0, 0, 0, 0)
+        local ok, result = pcall(baseDrawHUDs, self, ...)
+        g.pop()
+        if not ok then error(result, 0) end
+        return result
+      end
+      return baseDrawHUDs(self, ...)
+    end
+  end
 
 elseif type(OverworldBattle.drawHudPanels) == "function" then
   -- PotatoVoxel path. Like Ascendant, BattleState calls drawHudPanels before the
@@ -2960,9 +3603,13 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
     if not battle then return baseDrawHudPanels(battle) end
     battle._floatingBattleHudPanelDrawn = false
     local shot = battleShot(battle)
-    local statusDrawn = drawFloatingSceneUI(battle, shot, false)
+    local statusDrawn, bottomDrawn = drawFloatingSceneUI(battle, shot, false)
     if statusDrawn then
       battle._floatingBattleHudPanelDrawn = true
+    end
+    if statusDrawn or bottomDrawn
+        or (floatingCommandsEnabled() and battle.introBalls
+            and supportedFloatingLayout(battle)) then
       return
     end
     return baseDrawHudPanels(battle)
@@ -4103,8 +4750,8 @@ if not bottomHookInstalled then
   end
 end
 
-mod.exports.version = "0.7.10"
+mod.exports.version = "0.7.17"
 mod.exports.floatingHud = FloatingHud
 mod.exports.hostMode = hostMode
-mod.log:info("Floating Battle HUD 0.7.10 installed over %s %s (%s)",
+mod.log:info("Floating Battle HUD 0.7.17 installed over %s %s (%s)",
              tostring(hostId or "voxel host"), tostring(ds.version), tostring(hostMode))

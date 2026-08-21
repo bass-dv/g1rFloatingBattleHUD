@@ -1,3 +1,58 @@
+## v0.7.17 — ITEM quantities
+
+- ITEM now shows the available quantity right-aligned as `x2`, `x3`, etc. whenever at least two copies remain.
+- Single-copy items keep the previous uncluttered row and display no quantity.
+- The quantity is read only from the existing presentation mirror, preserving native Bag order, indices, consumption callbacks and Useful Bag compatibility.
+
+## v0.7.16 — stable rollback + trainer-intro ownership
+
+- Rebuilt strictly on the stable v0.7.15 codebase; no later global TextBox or overworld-render interception is included.
+- Dramatic Shape now keeps `BattleState:drawHUDs` alive under an empty scissor while the floating status HUD owns a normal staged battle. This removes the classic trainer/player Poké Ball comparison without skipping engine lifecycle work.
+- All supported non-iOS staged hosts now claim their native panel compositor during the silent lead-in of `introBalls`, removing the empty translucent rectangle before the challenge text begins.
+- The engine's authoritative localized trainer challenge text (for example, “POKéMANIAC wants to fight!”) continues through the existing floating battle-message plate as soon as the native message queue exposes it.
+- Restored the **HUD SCALE** choices to `x0.8`, `x1`, `x1.5`, `x2`, `x2.5`, `x3`.
+- Safari/demo battles and overworld dialogue remain outside these new guards.
+
+## v0.7.15 — FIGHT top render padding + Roar text
+
+- Added `FloatingHud.FIGHT.canvasTopPad` (default `12.0`) to give the move-detail header extra transparent render space above the authored plate without moving or scaling the plate itself.
+- Preserves the current hand-tuned FIGHT layout values from the supplied v0.7.14 main, including `contentYOffset = -10.0`.
+- Replaced the FIGHT divider with the newly supplied shorter/adjusted asset.
+- Updated ROAR description to: `In battles, the opponent switches. In the wild, the Pokémon runs.`
+
+## v0.7.14 — FIGHT group offset + trainer party status
+
+- Added `FloatingHud.FIGHT.contentYOffset`: one value now moves the complete dynamic FIGHT contents vertically while leaving the authored background plate untouched (`negative = up`, `positive = down`).
+- Added the same independent `FloatingHud.LEARN.contentYOffset` control to the move-forget picker.
+- Trainer battles now show a six-slot enemy party strip centred directly below the enemy battleplate: active, healthy, defeated and unused slots use the supplied dedicated ball assets.
+- Replaced the caught-species marker with the newly supplied `caught.png`.
+- The full status icon set remains bundled (`sleep`, `poison`, `burn`, `paralysis`, `frozen`).
+- Preserves the fail-closed host probe used by the Mod Index-compatible 0.7.13 base.
+
+## v0.7.13 — FIGHT layout pass + reusable percent glyph + status assets
+
+- Rebased on the user-tuned v0.7.12 `main.lua`, preserving the mod-index-safe early `return` when no supported voxel host is available.
+- Updated the FIGHT detail layout to the revised mockup: left-aligned/bottom-anchored descriptions, short divider, right-aligned accuracy number before `%`, category icon in the middle, and left-aligned power after the icon.
+- The custom pixel `%` is now an inline text glyph, so it works inside every move description and participates in text wrapping instead of only being drawn for accuracy.
+- Replaced the divider with the newly supplied shorter asset.
+- Added bundled SLEEP / POISON / BURN / FROZEN status assets alongside PARALYSIS so the floating status HUD no longer falls back to text for those conditions.
+
+## v0.7.12 — FIGHT detail fixes
+
+- Added an RBY move-description fallback based on Smogon RB semantics because vanilla Gen1Recomp move records contain ROM mechanics but no prose descriptions.
+- Moves whose Smogon entry is `No additional effect.` intentionally leave the description area blank.
+- Corrected the supplied PHYSICAL and STATUS category glyph mapping.
+- Replaced the unsupported font `%` character with a tiny code-drawn pixel percent glyph, so accuracy now renders as e.g. `100%`.
+- Status moves no longer show a placeholder power value; the power field is simply left blank.
+
+## v0.7.11 — expanded FIGHT move details
+
+- Rebuilt the floating **FIGHT** panel around the new widened plate asset.
+- Each move row now shows **current / max PP** on the right.
+- The header above the move list now shows the selected move's **description**, **accuracy**, **damage class icon** (physical / special / status), and **power** when available.
+- "No additional effect." descriptions are intentionally suppressed so purely blank-description moves keep the header clean.
+- The move-learning replacement picker mirrors the same upgraded layout so choosing a move to forget stays visually consistent.
+
 ## v0.7.10 — floating caught-Pokémon nickname prompt
 
 - Replaces the previous v0.7.9 native AskName handoff: staged battles no longer reveal Gen1Recomp's intentional full-white `blankForAskName` field after a catch.
