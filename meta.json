@@ -2,7 +2,7 @@
   "id": "FLOATING_BATTLE_HUD",
   "title": "Floating Battle HUD",
   "author": "Bass",
-  "version": "0.7.5",
+  "version": "0.7.17",
   "categories": [
     "UI",
     "QOL"
@@ -20,7 +20,8 @@
   "license": "MIT",
   "dependencies": [
     "DRAMATIC_SHAPE",
-    "POTATO_VOXEL"
+    "POTATO_VOXEL",
+    "VOXEL_ASCENDANT"
   ],
   "permissions": [
     "engine_internals"
