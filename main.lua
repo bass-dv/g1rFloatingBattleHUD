@@ -1,4 +1,4 @@
--- Floating Battle HUD v0.7.17
+-- Floating Battle HUD v0.7.18
 -- Companion mod for Dramatic Shape / PotatoVoxel / Voxel Ascendant staged battles.
 --
 -- v0.3 is the visual reset: the frosted cards are gone. The HUD is built
@@ -83,6 +83,131 @@ local ItemEffects = require("src.inventory.ItemEffects")
 
 local g = love.graphics
 local FloatingHud = {}
+
+-- Gen I's SE_WAVY_SCREEN (used by Psychic, Night Shade and Psywave) scrolls
+-- the complete BG tilemap one scanline at a time. In a staged voxel battle the
+-- world and this mod's floating plates live in shot.canvas instead, so the
+-- engine's original pass has almost nothing left to bend. Reapply the same
+-- eight-step offset pattern to the staged canvas while that semantic effect is
+-- active. The move's OAM sprites are still drawn later by BattleState and stay
+-- unwarped, matching the original BG-vs-OBJ split.
+local SCENE_WAVE_SHADER_SOURCE = [[
+  uniform float wavePhase;
+  uniform float rowScale;
+  uniform float rowOrigin;
+  uniform vec2 canvasSize;
+
+  float waveOffset(float index) {
+    float i = mod(index + 1024.0, 32.0);
+    if (i < 5.0) return 0.0;
+    if (i < 8.0) return 1.0;
+    if (i < 13.0) return 2.0;
+    if (i < 16.0) return 1.0;
+    if (i < 21.0) return 0.0;
+    if (i < 24.0) return -1.0;
+    if (i < 29.0) return -2.0;
+    return -1.0;
+  }
+
+  vec4 effect(vec4 color, Image tex, vec2 tc, vec2 sc) {
+    float logicalRow = floor((tc.y * canvasSize.y - rowOrigin)
+                             / max(1.0, rowScale));
+    float dx = waveOffset(logicalRow + wavePhase) * rowScale;
+    float sourceX = tc.x * canvasSize.x - dx;
+    if (sourceX < 0.0 || sourceX >= canvasSize.x) discard;
+    return Texel(tex, vec2(sourceX / canvasSize.x, tc.y)) * color;
+  }
+]]
+
+local sceneWaveShader = nil
+local sceneWaveShaderUnavailable = false
+local sceneWaveCanvas = nil
+local sceneWaveW, sceneWaveH = nil, nil
+local sceneWaveWarned = false
+
+local function getSceneWaveShader()
+  if sceneWaveShaderUnavailable then return nil end
+  if sceneWaveShader then return sceneWaveShader end
+  local ok, shader = pcall(g.newShader, SCENE_WAVE_SHADER_SOURCE)
+  if not (ok and shader) then
+    sceneWaveShaderUnavailable = true
+    if not sceneWaveWarned then
+      sceneWaveWarned = true
+      mod.log:warn("floating battle scene wave unavailable: %s",
+                   tostring(shader))
+    end
+    return nil
+  end
+  sceneWaveShader = shader
+  return shader
+end
+
+local function getSceneWaveCanvas(w, h)
+  if sceneWaveCanvas and sceneWaveW == w and sceneWaveH == h then
+    return sceneWaveCanvas
+  end
+  local ok, canvas = pcall(g.newCanvas, w, h, { dpiscale = 1 })
+  if not (ok and canvas) then return nil end
+  pcall(canvas.setFilter, canvas, "nearest", "nearest")
+  sceneWaveCanvas, sceneWaveW, sceneWaveH = canvas, w, h
+  return canvas
+end
+
+local function applySceneWave(battle, shot)
+  local wavy = battle and battle.fx and battle.fx.wavy
+  local target = shot and shot.canvas
+  if not (wavy and target and PLATFORM_OS ~= "iOS") then return false end
+  if battle._floatingBattleSceneWaveFrame == battle.frame
+      and battle._floatingBattleSceneWaveTarget == target then
+    return true
+  end
+
+  local shader = getSceneWaveShader()
+  local width, height = target:getWidth(), target:getHeight()
+  local copy = shader and getSceneWaveCanvas(width, height) or nil
+  if not copy then return false end
+
+  local prevCanvas = g.getCanvas()
+  local prevBlend, prevAlpha = g.getBlendMode()
+  local prevShader = g.getShader()
+  local prevR, prevG, prevB, prevA = g.getColor()
+  g.push("all")
+  local ok, err = pcall(function()
+    g.origin()
+    g.setScissor()
+    -- First take a stable snapshot. Sampling from the canvas currently being
+    -- written is undefined on several LOVE backends, especially Android.
+    g.setCanvas(copy)
+    g.setShader()
+    g.setBlendMode("replace", "premultiplied")
+    g.clear(0, 0, 0, 0)
+    g.setColor(1, 1, 1, 1)
+    g.draw(target, 0, 0)
+
+    -- Draw the shifted snapshot over the original. Discarded edge pixels leave
+    -- the unshifted world visible instead of creating black side slivers.
+    g.setCanvas(target)
+    g.setBlendMode("alpha")
+    g.setShader(shader)
+    shader:send("wavePhase", tonumber(wavy.phase) or 0)
+    shader:send("rowScale", math.max(1, tonumber(shot.scale) or 1))
+    shader:send("rowOrigin", tonumber(shot.ly) or 0)
+    shader:send("canvasSize", { width, height })
+    g.setColor(1, 1, 1, 1)
+    g.draw(copy, 0, 0)
+  end)
+  g.pop()
+
+  g.setShader(prevShader)
+  if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
+  g.setBlendMode(prevBlend or "alpha", prevAlpha)
+  g.setColor(prevR, prevG, prevB, prevA)
+  if not ok then error(err, 0) end
+
+  battle._floatingBattleSceneWaveFrame = battle.frame
+  battle._floatingBattleSceneWaveTarget = target
+  return true
+end
 
 -- One accessor for the three host families. Dramatic Shape / PotatoVoxel attach
 -- their current staged shot directly to BattleState; Ascendant uses its own field
@@ -3419,8 +3544,35 @@ local function drawFloatingSceneUI(battle, shot, includeTextGlass)
     return false, false
   end
 
+  -- The engine's SE_WAVY_SCREEN only bends its now-mostly-empty 160x144 BG
+  -- canvas. Once our floating surfaces are safely on the staged scene, bend
+  -- that scene too so Psychic's second half remains visible in voxel battles.
+  local waveOk, waveErr = pcall(applySceneWave, battle, shot)
+  if not waveOk and not sceneWaveWarned then
+    sceneWaveWarned = true
+    mod.log:warn("floating battle scene wave failed: %s", tostring(waveErr))
+  end
+
   battle._floatingBattleBottomDrawn = bottomKind
   return statusDrawn, bottomKind ~= nil
+end
+
+-- The temporary party-ball rows are fields inside BattleState:drawHUDs, not a
+-- separate visibility surface. Older builds hid them by running the whole
+-- method under an empty scissor. That was too broad: host or engine additions
+-- to drawHUDs (including animation-time presentation) disappeared with them.
+-- Mask only the two ball-row inputs and let the status visibility hook below
+-- continue to suppress the ordinary native HP/name blocks.
+local function drawHUDsWithoutNativeBallRows(draw, battle, ...)
+  local introBalls = rawget(battle, "introBalls")
+  local showEnemyBalls = rawget(battle, "showEnemyBalls")
+  battle.introBalls = nil
+  battle.showEnemyBalls = nil
+  local ok, a, b, c = pcall(draw, battle, ...)
+  battle.introBalls = introBalls
+  battle.showEnemyBalls = showEnemyBalls
+  if not ok then error(a, 0) end
+  return a, b, c
 end
 
 if isAscendantHost and not hostFloatingAvailable then
@@ -3471,18 +3623,7 @@ elseif isAscendantHost and type(OverworldBattle.drawHudPanels) == "function" the
                    and battleShot(self)
                    and plateImage("enemy") and plateImage("player")
       if owns then
-        local oldScissor = { g.getScissor() }
-        g.push("all")
-        g.setScissor(0, 0, 0, 0)
-        local ok, result = pcall(baseDrawHUDs, self, ...)
-        g.pop()
-        if oldScissor[1] then
-          g.setScissor(oldScissor[1], oldScissor[2], oldScissor[3], oldScissor[4])
-        else
-          g.setScissor()
-        end
-        if not ok then error(result, 0) end
-        return result
+        return drawHUDsWithoutNativeBallRows(baseDrawHUDs, self, ...)
       end
       return baseDrawHUDs(self, ...)
     end
@@ -3530,12 +3671,16 @@ elseif type(OverworldBattle.snapHUDs) == "function" then
   function FloatingHud.snapHUDs(battle, shot)
     local wantStatus = floatingStatusHudEnabled()
     local wantCommands = floatingCommandsEnabled()
+    battle._floatingBattleHudPanelDrawn = false
 
     if not wantStatus and not wantCommands then
       return baseSnapHUDs(battle, shot)
     end
 
     local statusDrawn, bottomDrawn = drawFloatingSceneUI(battle, shot, true)
+    if statusDrawn then
+      battle._floatingBattleHudPanelDrawn = true
+    end
 
     if not wantStatus and bottomDrawn then
       local nativeTextRects = OverworldBattle.textRects
@@ -3563,10 +3708,10 @@ elseif type(OverworldBattle.snapHUDs) == "function" then
 
   -- Gen1Recomp draws the temporary trainer/player Poké Ball rows inside
   -- BattleState:drawHUDs, independently of the lower-UI visibility predicate.
-  -- Keep the method alive for renderer lifecycle compatibility, but hide only
-  -- its pixels while this normal staged battle owns the floating status HUD.
-  -- This is deliberately BattleState-scoped: overworld TextBox rendering never
-  -- passes through this seam.
+  -- Keep the method alive for renderer lifecycle compatibility, mask only those
+  -- row inputs, and suppress its ordinary status blocks through the semantic
+  -- visibility seam below. This is deliberately BattleState-scoped: overworld
+  -- TextBox rendering never passes through it.
   local DRAW_KEY = "_floatingBattleHudBaseDrawHUDs"
   if not BattleState[DRAW_KEY] then BattleState[DRAW_KEY] = BattleState.drawHUDs end
   local baseDrawHUDs = BattleState[DRAW_KEY]
@@ -3577,14 +3722,38 @@ elseif type(OverworldBattle.snapHUDs) == "function" then
                    and plateImage("enemy") and plateImage("player")
                    and not self.safari and not self.demo
       if owns then
-        g.push("all")
-        g.setScissor(0, 0, 0, 0)
-        local ok, result = pcall(baseDrawHUDs, self, ...)
-        g.pop()
-        if not ok then error(result, 0) end
-        return result
+        return drawHUDsWithoutNativeBallRows(baseDrawHUDs, self, ...)
       end
       return baseDrawHUDs(self, ...)
+    end
+  end
+
+  local statusHookInstalled = false
+  if mod.hooks and type(mod.hooks.wrap) == "function" then
+    mod.hooks:wrap("battle.status_hud_visible", function(next, state)
+      if floatingStatusHudEnabled() and state and battleShot(state)
+          and state._floatingBattleHudPanelDrawn then
+        return false
+      end
+      return next(state)
+    end, 12000)
+    statusHookInstalled = true
+  end
+
+  if not statusHookInstalled then
+    local STATUS_KEY = "_floatingBattleHudBaseStatusHUDVisible"
+    if not BattleState[STATUS_KEY] then
+      BattleState[STATUS_KEY] = BattleState.statusHUDVisible
+    end
+    local baseStatusHUDVisible = BattleState[STATUS_KEY]
+    if type(baseStatusHUDVisible) == "function" then
+      function BattleState:statusHUDVisible(...)
+        if floatingStatusHudEnabled() and battleShot(self)
+            and self._floatingBattleHudPanelDrawn then
+          return false
+        end
+        return baseStatusHUDVisible(self, ...)
+      end
     end
   end
 
@@ -3626,18 +3795,7 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
                    and battleShot(self)
                    and plateImage("enemy") and plateImage("player")
       if owns then
-        local oldScissor = { g.getScissor() }
-        g.push("all")
-        g.setScissor(0, 0, 0, 0)
-        local ok, result = pcall(baseDrawHUDs, self, ...)
-        g.pop()
-        if oldScissor[1] then
-          g.setScissor(oldScissor[1], oldScissor[2], oldScissor[3], oldScissor[4])
-        else
-          g.setScissor()
-        end
-        if not ok then error(result, 0) end
-        return result
+        return drawHUDsWithoutNativeBallRows(baseDrawHUDs, self, ...)
       end
       return baseDrawHUDs(self, ...)
     end
@@ -4750,8 +4908,8 @@ if not bottomHookInstalled then
   end
 end
 
-mod.exports.version = "0.7.17"
+mod.exports.version = "0.7.18"
 mod.exports.floatingHud = FloatingHud
 mod.exports.hostMode = hostMode
-mod.log:info("Floating Battle HUD 0.7.17 installed over %s %s (%s)",
+mod.log:info("Floating Battle HUD 0.7.18 installed over %s %s (%s)",
              tostring(hostId or "voxel host"), tostring(ds.version), tostring(hostMode))
