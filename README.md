@@ -1,3 +1,23 @@
+## v0.7.20 — BACK SPRITES foreground compositing
+
+- When **BACK SPRITES** / **show backs** is enabled, every Floating Battle HUD surface is deferred to the final HUD pass so the pinned player sprite can no longer cover it.
+- The foreground pass maps the existing staged-shot coordinates into window space; battleplate heights, offsets, scale and perspective tuning are unchanged from v0.7.18.
+- Normal staged battles keep their existing scene-canvas path unchanged.
+
+## v0.7.19 — BACK SPRITES / show backs compatibility
+
+- Floating status plates and battle-flow panels now remain active when a supported voxel host enables **BACK SPRITES** / **show backs**.
+- The pinned player back sprite continues to use the host's native foreground presentation while Floating Battle HUD reuses the staged scene's existing projected anchors and canvas.
+- VR, Safari and demo battles keep their previous native fallbacks.
+
+## v0.7.18 — restored Psychic / wavy-screen effects
+
+- Restores the `SE_WAVY_SCREEN` half of Psychic in staged voxel battles by applying Gen I's scanline wave to the live 3D scene and Floating HUD surfaces.
+- The same semantic fix also covers Night Shade, Psywave and any modded move that reuses `SE_WAVY_SCREEN`; it is not a brittle move-name whitelist.
+- Replaces the broad `BattleState:drawHUDs` empty-scissor suppression with narrow masking of only `introBalls` and `showEnemyBalls`, preserving host/engine animation-time drawing while the existing status-visibility hook continues to hide the native HP/name HUD.
+- The animation sprite layer remains unwarped, matching the Game Boy split between its scrolling background and OBJ sprites.
+- iOS keeps the existing fail-closed canvas policy for this added pass.
+
 ## v0.7.17 — ITEM quantities
 
 - ITEM now shows the available quantity right-aligned as `x2`, `x3`, etc. whenever at least two copies remain.

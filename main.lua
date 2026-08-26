@@ -1,4 +1,4 @@
--- Floating Battle HUD v0.7.18
+-- Floating Battle HUD v0.7.20
 -- Companion mod for Dramatic Shape / PotatoVoxel / Voxel Ascendant staged battles.
 --
 -- v0.3 is the visual reset: the frosted cards are gone. The HUD is built
@@ -3427,6 +3427,37 @@ local function drawBattleFlowPanel(battle, shot)
   return nil
 end
 
+-- Presentation-only mirror of drawBattleFlowPanel's ownership decision. When
+-- BACK SPRITES is active the host composites its pinned player pic from the
+-- classic UI canvas after shot.canvas, so drawing our surfaces into the shot
+-- would put them behind that pic. We still need to claim the same native UI
+-- phases before the classic canvas is rendered, then paint the real surfaces
+-- later in render.hud.
+local function battleFlowKind(battle)
+  if not (battle and floatingCommandsEnabled()) then return nil end
+  local game = battle.game
+  local top = game and topState(game) or nil
+
+  if nicknameOverlayActiveForBattle(battle) then return "nickname" end
+  if moveLearnOverlayActiveForBattle(battle) then return "learn" end
+
+  local choice = battle._floatingBattleChoice
+  if choice and top == choice and stateInStack(game, choice) then
+    return "messages"
+  end
+  if partyOverlayActiveForBattle(battle) then return "party" end
+  if itemOverlayActiveForBattle(battle) then return "item" end
+  if battleMessageActive(battle) then return "messages" end
+  if battle.phase == "menu" and not battle.demo and not battle.safari then
+    return "menu"
+  end
+  if battle.phase == "moveSelect" and battle.player
+      and battle.player.curMoves and not battle.demo and not battle.safari then
+    return "moves"
+  end
+  return nil
+end
+
 local function bottomOwnedThisFrame(battle)
   if not battle then return false end
   local owned = battle._floatingBattleBottomDrawn
@@ -3453,10 +3484,20 @@ local function vrActive()
   return ok and vr and vr.active and vr.active() or false
 end
 
+local function backPinnedActive()
+  if type(OverworldBattle.backPinned) ~= "function" then return false end
+  local ok, pinned = pcall(OverworldBattle.backPinned)
+  return ok and pinned == true
+end
+
 local function supportedFloatingLayout(battle)
   if not battle then return false end
   if vrActive() then return false end
-  if OverworldBattle.backPinned and OverworldBattle.backPinned() then return false end
+  -- BACK SPRITES / show backs only pins the player's flat back pic to its
+  -- classic foreground slot. The staged shot, projected player/enemy anchors
+  -- and scene canvas remain available, so the floating UI can use the exact
+  -- same integration path instead of handing the entire battle back to native
+  -- HUD rendering.
   if battle.safari or battle.demo then return false end
   return true
 end
@@ -3502,6 +3543,27 @@ local function drawFloatingSceneUI(battle, shot, includeTextGlass)
   local enemyLive, playerLive = floatingHudLive(battle, slide)
   local statusDrawn = false
   local bottomKind = nil
+
+  -- The pinned back sprite lives in the classic 160x144 UI canvas, which the
+  -- engine composites over shot.canvas. Defer our surfaces to render.hud in
+  -- this one mode so they remain in front. Ownership is decided here, before
+  -- the native battle UI draws, without changing any of the established world
+  -- coordinates or height tuning used by either mode.
+  if backPinnedActive() then
+    statusDrawn = wantsStatus and statusAssetsReady
+                  and (enemyLive or playerLive) and true or false
+    if wantsCommands then bottomKind = battleFlowKind(battle) end
+
+    local waveOk, waveErr = pcall(applySceneWave, battle, shot)
+    if not waveOk and not sceneWaveWarned then
+      sceneWaveWarned = true
+      mod.log:warn("floating battle scene wave failed: %s", tostring(waveErr))
+    end
+
+    battle._floatingBattleBottomDrawn = bottomKind
+    battle._floatingBattleBackPinnedDeferredFrame = battle.frame
+    return statusDrawn, bottomKind ~= nil
+  end
 
   local prevCanvas = g.getCanvas()
   local prevBlend, prevAlpha = g.getBlendMode()
@@ -3832,6 +3894,141 @@ elseif type(OverworldBattle.drawHudPanels) == "function" then
 
 else
   error("FLOATING_BATTLE_HUD: unsupported OverworldBattle HUD API", 0)
+end
+
+-- BACK SPRITES foreground pass ------------------------------------------------
+--
+-- Renderer:endFrame composites the staged scene first and the engine's classic
+-- battle canvas (including the pinned back sprite) second. render.hud is the
+-- first semantic seam after that composite. Map shot framebuffer coordinates
+-- into its LOVE/window coordinate space and redraw the same surfaces once,
+-- preserving their exact v0.7.18 layout while changing only their z-order.
+local function markBackPinnedForegroundFallbacks(battle)
+  local frame = battle and battle.frame
+  if frame == nil then return end
+  battle._floatingBattlePartySceneFrame = frame
+  battle._floatingBattleItemSceneFrame = frame
+  battle._floatingBattleMoveLearnSceneFrame = frame
+  battle._floatingBattleNicknameSceneFrame = frame
+  battle._floatingBattleChoiceSceneFrame = frame
+end
+
+local backPinnedForegroundCanvas = nil
+local backPinnedForegroundW, backPinnedForegroundH = nil, nil
+
+local function getBackPinnedForegroundCanvas(shot)
+  local w = math.max(1, math.floor((tonumber(shot and shot.pw) or 1) + 0.5))
+  local h = math.max(1, math.floor((tonumber(shot and shot.ph) or 1) + 0.5))
+  if backPinnedForegroundCanvas
+      and backPinnedForegroundW == w and backPinnedForegroundH == h then
+    return backPinnedForegroundCanvas
+  end
+  local ok, canvas = pcall(g.newCanvas, w, h, { dpiscale = 1 })
+  if not (ok and canvas) then return nil end
+  pcall(canvas.setFilter, canvas, "linear", "linear")
+  backPinnedForegroundCanvas = canvas
+  backPinnedForegroundW, backPinnedForegroundH = w, h
+  return canvas
+end
+
+local function drawBackPinnedForeground(battle, shot, viewport)
+  if not (battle and shot and supportedFloatingLayout(battle)
+      and backPinnedActive()) then return false end
+
+  local wantsStatus = floatingStatusHudEnabled()
+  local wantsCommands = floatingCommandsEnabled()
+  if not wantsStatus and not wantsCommands then return false end
+
+  local dpiX = math.max(0.001, tonumber(viewport and viewport.dpiX) or 1)
+  local dpiY = math.max(0.001, tonumber(viewport and viewport.dpiY) or dpiX)
+  local viewX = tonumber(viewport and viewport.viewX) or 0
+  local viewY = tonumber(viewport and viewport.viewY) or 0
+  local viewW = tonumber(viewport and viewport.viewWidth)
+              or ((tonumber(shot.pw) or 0) / dpiX)
+  local viewH = tonumber(viewport and viewport.viewHeight)
+              or ((tonumber(shot.ph) or 0) / dpiY)
+  local foreground = getBackPinnedForegroundCanvas(shot)
+  if not foreground then return false end
+
+  local statusAssetsReady = plateImage("enemy") and plateImage("player")
+  local slide = (battle.introSlide or 0) * 4
+  local enemyLive, playerLive = floatingHudLive(battle, slide)
+  local statusDrawn = false
+  local bottomKind = nil
+
+  local previousCanvas = g.getCanvas()
+  g.push("all")
+  local ok, err = pcall(function()
+    -- Render with the original framebuffer-space shot. This is deliberately a
+    -- full-size transparent intermediate instead of a graphics transform:
+    -- the panel rasterizers call g.origin() while visiting their own canvases,
+    -- so a parent scale would be lost and mobile DPI would change the layout.
+    g.setCanvas(foreground)
+    g.origin()
+    g.setScissor()
+    g.clear(0, 0, 0, 0)
+    g.setBlendMode("alpha")
+    g.setShader()
+    g.setColor(1, 1, 1, 1)
+
+    if wantsStatus and statusAssetsReady and enemyLive then
+      statusDrawn = drawCard(battle, shot, "enemy", battle.enemy) or statusDrawn
+    end
+    if wantsStatus and statusAssetsReady and playerLive then
+      statusDrawn = drawCard(battle, shot, "player", battle.player) or statusDrawn
+    end
+    if wantsCommands then
+      bottomKind = drawBattleFlowPanel(battle, shot)
+    end
+
+    -- Restore render.hud's target and composite the transparent foreground in
+    -- the same 1:1 framebuffer mapping Renderer uses for shot.canvas. The iOS
+    -- branch mirrors the host's worldOverride presentation convention.
+    if previousCanvas then g.setCanvas(previousCanvas) else g.setCanvas() end
+    g.origin()
+    if viewW > 0 and viewH > 0 then
+      g.setScissor(viewX, viewY, viewW, viewH)
+    end
+    g.setBlendMode("alpha")
+    g.setShader()
+    g.setColor(1, 1, 1, 1)
+    if PLATFORM_OS == "iOS" then
+      g.draw(foreground, viewX, viewY + viewH, 0, 1 / dpiX, -1 / dpiY)
+    else
+      g.draw(foreground, viewX, viewY, 0, 1 / dpiX, 1 / dpiY)
+    end
+  end)
+  if previousCanvas then g.setCanvas(previousCanvas) else g.setCanvas() end
+  g.pop()
+
+  if not ok then
+    mod.log:warn("floating BACK SPRITES foreground draw failed: %s", tostring(err))
+    return false
+  end
+
+  battle._floatingBattleHudPanelDrawn = statusDrawn and true or false
+  battle._floatingBattleBottomDrawn = bottomKind
+  battle._floatingBattleBackPinnedForegroundFrame = battle.frame
+  return statusDrawn or bottomKind ~= nil
+end
+
+if mod.hooks and type(mod.hooks.wrap) == "function" then
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local battle = battleStateInStack(game)
+    local shot = battle and battleShot(battle) or nil
+    local deferred = battle and shot and backPinnedActive()
+                     and supportedFloatingLayout(battle)
+
+    -- Existing pushed-state fallbacks run farther down this same hook chain.
+    -- Mark this frame before next() so they do not paint a duplicate; this
+    -- high-priority wrapper then draws the complete foreground last.
+    if deferred then markBackPinnedForegroundFallbacks(battle) end
+    local out = next(game, viewport)
+    if deferred then
+      drawBackPinnedForeground(battle, shot, viewport)
+    end
+    return out
+  end, 25000)
 end
 
 -- ---------------------------------------------------------------------------
@@ -4908,8 +5105,8 @@ if not bottomHookInstalled then
   end
 end
 
-mod.exports.version = "0.7.18"
+mod.exports.version = "0.7.20"
 mod.exports.floatingHud = FloatingHud
 mod.exports.hostMode = hostMode
-mod.log:info("Floating Battle HUD 0.7.18 installed over %s %s (%s)",
+mod.log:info("Floating Battle HUD 0.7.20 installed over %s %s (%s)",
              tostring(hostId or "voxel host"), tostring(ds.version), tostring(hostMode))
