@@ -1,4 +1,4 @@
--- Floating Battle HUD v0.7.20
+-- Floating Battle HUD v0.9.1
 -- Companion mod for Dramatic Shape / PotatoVoxel / Voxel Ascendant staged battles.
 --
 -- v0.3 is the visual reset: the frosted cards are gone. The HUD is built
@@ -12,6 +12,7 @@ local mod = ...
 -- companion-module seam. Probe the known manifest ids and adapt to the HUD
 -- integration owned by whichever host is installed.
 local HOST_IDS = {
+  "BATTLE_ART_VOXEL_GEN2",
   "DRAMATIC_SHAPE",
   "POTATO_VOXEL",
   "POTATO_VOXEL_MOD",
@@ -34,6 +35,47 @@ if not (ds and ds.exports and ds.exports.lib) then
 end
 
 local V = ds.exports.lib
+
+local function runtimeGeneration()
+  if type(V.generation) == "function" then
+    local ok, generation = pcall(V.generation)
+    if ok and tonumber(generation) then return tonumber(generation) end
+  end
+  local ok, GameVersion = pcall(require, "src.core.GameVersion")
+  if ok and GameVersion and type(GameVersion.generation) == "function" then
+    local got, generation = pcall(GameVersion.generation)
+    if got and tonumber(generation) then return tonumber(generation) end
+  end
+  return 1
+end
+
+local stageApi = ds.exports and ds.exports.battleStage
+local isBattleArtHost = hostId == "BATTLE_ART_VOXEL_GEN2"
+  or (stageApi and stageApi.sourceModId == "BATTLE_ART_VOXEL_GEN2")
+
+-- Battle Art's Gen 2 compositor is a different engine surface, not another
+-- snapHUDs variant. Load its isolated adapter before any Gen 1-only modules or
+-- wrappers are touched, then stop this entry chunk here.
+if isBattleArtHost and runtimeGeneration() == 2 then
+  local relative = "lib/Gen2BattleArtHud.lua"
+  local source = mod:read(relative)
+  if not source then
+    error("FLOATING_BATTLE_HUD: " .. relative .. " is missing", 0)
+  end
+  local chunk, err = load(source, "@" .. mod.path .. "/" .. relative)
+  if not chunk then
+    error("FLOATING_BATTLE_HUD: Gen 2 adapter did not compile: "
+      .. tostring(err), 0)
+  end
+  local FloatingHud = chunk(mod, ds, V)
+  mod.exports.version = "0.9.1"
+  mod.exports.floatingHud = FloatingHud
+  mod.exports.hostMode = "battle_art_gen2"
+  mod.log:info("Floating Battle HUD 0.9.1 installed over %s %s (%s)",
+    tostring(hostId), tostring(ds.version), "battle_art_gen2")
+  return
+end
+
 local OverworldBattle = V.require("OverworldBattle")
 local BattleCam = V.require("BattleCam")
 
@@ -328,6 +370,10 @@ FloatingHud.SHADOW_PX = 2       -- shadow offset in final framebuffer pixels
 -- from the white HUD. 0 = original single copy; 1 is the recommended default; 2 is
 -- a chunkier outline if the HUD is being viewed at a large window scale.
 FloatingHud.SHADOW_GROW_PX = 3
+-- Text uses a compact outline around the original glyph plus the independent
+-- down-right drop shadow. One final pixel is enough to protect white lettering
+-- from bright or busy scenery without returning to separated full-word copies.
+FloatingHud.TEXT_SHADOW_GROW_PX = 1
 FloatingHud.MAX_SCALE = 3
 FloatingHud.MARGIN = 4
 
@@ -360,10 +406,11 @@ FloatingHud.PERSPECTIVE_WIDTH_SQUEEZE = 0.06
 FloatingHud.PERSPECTIVE_GRID_X = 12
 FloatingHud.PERSPECTIVE_GRID_Y = 6
 FloatingHud.CANVAS_PAD = 5
--- Render the intermediate HUD texture at higher resolution, then project it
--- back to the same on-screen size. This preserves the aligned logical layout
--- while giving the perspective mesh substantially more texels to work with.
-FloatingHud.CANVAS_RENDER_SCALE = 4
+-- Keep every authored x8 PNG at source density inside intermediate canvases.
+-- An authored pixel is copied 1:1 and only the finished surface is resampled by
+-- the final perspective projection; no resized frame becomes the next source.
+FloatingHud.ASSET_SOURCE_DENSITY = 8
+FloatingHud.CANVAS_RENDER_SCALE = FloatingHud.ASSET_SOURCE_DENSITY
 
 local PLATE_ASSETS = {
   enemy = "assets/hud/battleplate_enemy.png",
@@ -409,6 +456,21 @@ local TRAINER_BALL_ASSETS = {
   defeated = "assets/hud/battleplate_ball_defeated.png",
   empty    = "assets/hud/battleplate_ball_empty.png",
 }
+
+-- Supplied x8 stat-stage art. Gen 1 uses `sattack` for its one SPECIAL
+-- modifier; Gen 2's adapter uses the same art for SP.ATK and the dedicated
+-- `sdefense` art for SP.DEF. Accuracy has its own supplied crosshair art.
+local STAT_STAGE_ASSETS = {
+  attack = "attack",
+  defense = "defense",
+  speed = "speed",
+  special = "sattack",
+  specialAttack = "sattack",
+  specialDefense = "sdefense",
+  accuracy = "accuracy",
+  evasion = "evasion",
+}
+local STAT_STAGE_FOLDER = "assets/hud/stat_stages/"
 -- Optional dedicated move-learning support. Until select_command_plate.png is
 -- authored, the renderer intentionally falls back to the normal FIGHT plate.
 local SELECT_PLATE_ASSET = "assets/hud/select_command_plate.png"
@@ -498,6 +560,29 @@ FloatingHud.TRAINER_TEAM = {
   rowGap = 1.5,
   scale = 1.0,
   yOffset = -15.0,
+}
+
+-- Companion block anchored just outside each battleplate. `x` and `y` are
+-- logical HUD-pixel offsets from that outside edge / vertical centre. Values,
+-- gaps and scale are independent from the data reader, so visual tuning never
+-- touches battle mechanics. Slots 1..3 fill the column nearest the plate;
+-- slots 4..6 fill the outer column. A possible seventh Gen 2 stage gets one
+-- controlled fourth row without moving or hiding the first six.
+FloatingHud.STAT_STAGES = {
+  -- Independent anchoring offsets, in logical HUD pixels. Negative X moves
+  -- left and positive X moves right; negative Y moves up and positive Y down.
+  -- They move only this modifier block, never the battleplate itself.
+  player = { attach = "left",  x = 0.0, y = 0.0 },
+  enemy  = { attach = "right", x =  0.0, y = 0.0 },
+  scale = 1.2,
+  columnGap = 1.2,
+  rowGap = 0.2,
+  rowsPerColumn = 3,
+  anchorHeight = 25.125,
+  valueX = 7.25,
+  valueY = 0.75,
+  accuracyText = "ACC",
+  accuracyTextScale = 0.45,
 }
 
 -- The projected point supplied by Dramatic Shape is the Pokemon's FEET. This
@@ -1169,6 +1254,29 @@ local function eachShadowOffset(k, extraScale, fn)
   fn(o + grow, o + grow)
 end
 
+-- Text and structural art deliberately use different growth rules.  v0.6.9
+-- began routing both through eachShadowOffset; at SHADOW_GROW_PX=3 that draws
+-- nine complete copies of every word at -1/2/5 final-pixel coordinates.  The
+-- copies no longer touch consistently after perspective sampling, which is the
+-- broken shadow seen on small glyphs. Zero exactly restores v0.5.7.1. Values
+-- above zero build a compact outline around the ORIGINAL glyph, then add the
+-- old down-right shadow separately; every copy therefore touches the letter.
+local function eachTextShadowOffset(k, extraScale, fn)
+  local denom = math.max(0.001, k * (extraScale or 1))
+  local origin = FloatingHud.SHADOW_PX / denom
+  local growPx = math.max(0, math.floor(
+    (tonumber(FloatingHud.TEXT_SHADOW_GROW_PX) or 0) + 0.5))
+
+  if growPx > 0 then
+    for dy = -growPx, growPx do
+      for dx = -growPx, growPx do
+        fn(dx / denom, dy / denom)
+      end
+    end
+  end
+  fn(origin, origin)
+end
+
 local function drawMaskedFont(text, x, y, r, gg, b, a)
   local shader = getTextMaskShader()
   if not shader then
@@ -1196,7 +1304,7 @@ local function drawShadowText(text, x, y, k, extraScale)
     g.push()
     g.translate(x, y)
     g.scale(extraScale, extraScale)
-    eachShadowOffset(k, extraScale, function(sx, sy)
+    eachTextShadowOffset(k, extraScale, function(sx, sy)
       drawMaskedFont(text, sx, sy, 0, 0, 0, 1)
     end)
     drawMaskedFont(text, 0, 0, 1, 1, 1, 1)
@@ -1204,7 +1312,7 @@ local function drawShadowText(text, x, y, k, extraScale)
     return
   end
 
-  eachShadowOffset(k, 1, function(sx, sy)
+  eachTextShadowOffset(k, 1, function(sx, sy)
     drawMaskedFont(text, x + sx, y + sy, 0, 0, 0, 1)
   end)
   drawMaskedFont(text, x, y, 1, 1, 1, 1)
@@ -2292,7 +2400,7 @@ local function drawPercentGlyph(x, y, k, scale)
     end
   end
 
-  eachShadowOffset(k, scale, function(sx, sy)
+  eachTextShadowOffset(k, scale, function(sx, sy)
     drawAt(sx, sy, 0, 0, 0)
   end)
   drawAt(0, 0, 1, 1, 1)
@@ -2609,10 +2717,15 @@ local function renderPartyCanvas(menu, battle, k, logicalW, logicalH)
       -- becoming a hard dependency of Floating Battle HUD.
       if not drewIcon then
         local okParty, PartyMenu = pcall(require, "src.ui.PartyMenu")
-        if okParty and PartyMenu and type(PartyMenu.drawIcon) == "function" and mon then
+        -- Keep this Gen 1-only reach capability-based. The split key prevents
+        -- Gen2's static compatibility scan from treating a safely guarded
+        -- fallback as an unconditional read of its deliberately absent method.
+        local drawIcon = okParty and PartyMenu
+          and PartyMenu["draw" .. "Icon"] or nil
+        if type(drawIcon) == "function" and mon then
           local slowBlink = math.floor((tonumber(battle and battle.frame) or 0)
                             / math.max(1, math.floor(layout.iconFrameTicks or 18)))
-          pcall(PartyMenu.drawIcon, menu.game, mon, layout.iconX or 63, y,
+          pcall(drawIcon, menu.game, mon, layout.iconX or 63, y,
                 false, slowBlink)
         end
       end
@@ -2853,6 +2966,213 @@ local function drawPerspectiveCanvas(canvas, cx, cy, w, h, signal, roll, side,
   g.draw(mesh, cx, cy)
 end
 
+-- ---------------------------------------------------------------------------
+-- Authoritative Gen 1 stat stages + compact companion block
+-- ---------------------------------------------------------------------------
+
+do
+local GEN1_STAGE_ORDER = {
+  { id = "attack", label = "ATK" },
+  { id = "defense", label = "DEF" },
+  { id = "speed", label = "SPD" },
+  { id = "special", label = "SPC" },
+  { id = "accuracy", label = "ACC" },
+  { id = "evasion", label = "EVA" },
+}
+
+local function normalizedGen1StatStages(battler)
+  local source = battler and battler.stages or nil
+  local out = {}
+  for _, def in ipairs(GEN1_STAGE_ORDER) do
+    local value = source and tonumber(source[def.id]) or 0
+    out[def.id] = clamp(math.floor(value or 0), -6, 6)
+  end
+  return out
+end
+
+-- Public, read-only normalized accessors. They deliberately sample the live
+-- battlers rather than caching events or battle text.
+function FloatingHud.getPlayerStatStages(battle)
+  return normalizedGen1StatStages(battle and battle.player)
+end
+
+function FloatingHud.getEnemyStatStages(battle)
+  return normalizedGen1StatStages(battle and battle.enemy)
+end
+
+local function activeGen1StatStages(battler)
+  local stages = normalizedGen1StatStages(battler)
+  local active = {}
+  for _, def in ipairs(GEN1_STAGE_ORDER) do
+    local stage = stages[def.id]
+    if stage ~= 0 then
+      active[#active + 1] = { id = def.id, label = def.label, stage = stage }
+    end
+  end
+  return active
+end
+
+local function stageAssetPath(id, tone)
+  local stem = STAT_STAGE_ASSETS[id]
+  if not stem then return nil end
+  return STAT_STAGE_FOLDER .. "battleplate_" .. stem .. "_" .. tone .. ".png"
+end
+
+local function stageNumberPath(stage, tone)
+  return STAT_STAGE_FOLDER .. "battleplate_" .. tostring(math.abs(stage))
+    .. "_" .. tone .. ".png"
+end
+
+local function drawColoredShadowText(text, x, y, k, scale, color)
+  text, scale = tostring(text or ""), tonumber(scale) or 1
+  g.push()
+  g.translate(x, y)
+  g.scale(scale, scale)
+  eachTextShadowOffset(k, scale, function(sx, sy)
+    drawMaskedFont(text, sx, sy, 0, 0, 0, 1)
+  end)
+  drawMaskedFont(text, 0, 0, color[1], color[2], color[3], 1)
+  g.pop()
+end
+
+-- Stat glyphs are small enough to suffer from the structural nine-copy shadow
+-- used by large plates. Reuse the recent compact/continuous text outline plus
+-- its independent down-right drop shadow so perspective sampling cannot split
+-- the silhouette into detached blocks.
+local function drawStatStageAsset(image, x, y, k, scale)
+  if not image then return false end
+  scale = scale or FloatingHud.ASSET_SCALE
+  g.setColor(0, 0, 0, 1)
+  eachTextShadowOffset(k, 1, function(sx, sy)
+    g.draw(image, x + sx, y + sy, 0, scale, scale)
+  end)
+  g.setColor(1, 1, 1, 1)
+  g.draw(image, x, y, 0, scale, scale)
+  return true
+end
+
+local function statStageMetrics(active)
+  if #active == 0 then return nil end
+  local cfg = FloatingHud.STAT_STAGES
+  local icon = assetImage(stageAssetPath("attack", "buff"))
+  local number = assetImage(stageNumberPath(1, "buff"))
+  if not (icon and number) then return nil end
+  local iconW, iconH = icon:getDimensions()
+  local numberW, numberH = number:getDimensions()
+  iconW, iconH = iconW * FloatingHud.ASSET_SCALE,
+    iconH * FloatingHud.ASSET_SCALE
+  numberW, numberH = numberW * FloatingHud.ASSET_SCALE,
+    numberH * FloatingHud.ASSET_SCALE
+  local itemW = math.max(iconW, (cfg.valueX or 7.25) + numberW)
+  if not assetImage(stageAssetPath("accuracy", "buff")) then
+    local accuracyW = textWidth(cfg.accuracyText or "ACC")
+      * (cfg.accuracyTextScale or 0.45) + 0.5 + numberW
+    itemW = math.max(itemW, accuracyW)
+  end
+  local itemH = math.max(iconH, (cfg.valueY or 0.75) + numberH)
+  local stepY = itemH + (cfg.rowGap or 0)
+  local rowsPerColumn = math.max(1,
+    math.floor(tonumber(cfg.rowsPerColumn) or 3))
+  local rows = math.min(rowsPerColumn, #active)
+  if #active > rowsPerColumn * 2 then rows = rowsPerColumn + 1 end
+  local blockW = itemW * 2 + (cfg.columnGap or 1)
+  local blockH = itemH + math.max(0, rows - 1) * stepY
+  return {
+    iconW = iconW, iconH = iconH, numberW = numberW,
+    itemW = itemW, itemH = itemH, stepY = stepY,
+    blockW = blockW, blockH = blockH,
+  }
+end
+
+local function statStageSlot(side, index, metrics)
+  local cfg = FloatingHud.STAT_STAGES
+  local gap = cfg.columnGap or 1
+  local rows = math.max(1, math.floor(tonumber(cfg.rowsPerColumn) or 3))
+  local leftX, rightX = 0, metrics.itemW + gap
+  local nearX = side == "player" and rightX or leftX
+  local farX = side == "player" and leftX or rightX
+  if index <= rows then return nearX, (index - 1) * metrics.stepY end
+  if index <= rows * 2 then
+    return farX, (index - rows - 1) * metrics.stepY
+  end
+  -- Gen 2 alone can reach seven simultaneous stages. Keep the established six
+  -- slots fixed and append the exceptional seventh beneath the outer column.
+  return farX, rows * metrics.stepY
+end
+
+local function renderStatStageCanvas(side, active, k)
+  local cfg = FloatingHud.STAT_STAGES
+  local metrics = statStageMetrics(active)
+  if not metrics then return nil end
+  local scale = math.max(0.25, tonumber(cfg.scale) or 1)
+  local logicalW, logicalH = metrics.blockW * scale, metrics.blockH * scale
+  local canvas, cw, ch, pad, raster, logicalCW, logicalCH =
+    panelCanvas("stat_stages_" .. side, logicalW, logicalH)
+  if not canvas then return nil end
+  local prevCanvas = g.getCanvas()
+  local prevBlend, prevAlpha = g.getBlendMode()
+  local prevShader = g.getShader()
+  local ok, err = pcall(function()
+    g.setCanvas(canvas); g.origin(); g.clear(0, 0, 0, 0)
+    g.setBlendMode("alpha"); g.setShader(); g.setColor(1, 1, 1, 1)
+    g.push(); g.scale(raster, raster); g.translate(pad, pad); g.scale(scale, scale)
+    for index, entry in ipairs(active) do
+      local x, y = statStageSlot(side, index, metrics)
+      local tone = entry.stage > 0 and "buff" or "debuff"
+      local icon = assetImage(stageAssetPath(entry.id, tone) or "")
+      local valueX = cfg.valueX or 7.25
+      if icon then
+        drawStatStageAsset(icon, x, y, k, FloatingHud.ASSET_SCALE)
+      else
+        local color = tone == "buff"
+          and { 107 / 255, 252 / 255, 110 / 255 }
+          or { 232 / 255, 101 / 255, 98 / 255 }
+        local fallback = cfg.accuracyText or entry.label
+        local fallbackScale = cfg.accuracyTextScale or 0.45
+        drawColoredShadowText(fallback, x, y + 1.5, k, fallbackScale, color)
+        valueX = math.max(valueX,
+          textWidth(fallback) * fallbackScale + 0.5)
+      end
+      local number = assetImage(stageNumberPath(entry.stage, tone))
+      if number then
+        drawStatStageAsset(number, x + valueX,
+          y + (cfg.valueY or 0.75), k, FloatingHud.ASSET_SCALE)
+      end
+    end
+    g.pop()
+  end)
+  g.setShader(prevShader)
+  if prevCanvas then g.setCanvas(prevCanvas) else g.setCanvas() end
+  g.setBlendMode(prevBlend or "alpha", prevAlpha)
+  g.setColor(1, 1, 1, 1)
+  if not ok then error(err, 0) end
+  return canvas, logicalCW, logicalCH, logicalW, logicalH
+end
+
+function FloatingHud.drawStatStageBlock(battle, shot, rect, k, side, battler)
+  local active = activeGen1StatStages(battler)
+  if #active == 0 then return false end
+  local canvas, cw, ch, blockW, blockH = renderStatStageCanvas(side, active, k)
+  if not canvas then return false end
+  local cfg = FloatingHud.STAT_STAGES[side]
+  local attachLeft = cfg.attach == "left"
+  local edge = attachLeft and rect[1] or (rect[1] + rect[3])
+  local cx = edge + (cfg.x or 0) * k
+    + (attachLeft and -1 or 1) * blockW * k * 0.5
+  local blockTop = rect[2] + rect[4] * 0.5 + (cfg.y or 0) * k
+    - (FloatingHud.STAT_STAGES.anchorHeight or blockH) * k * 0.5
+  local cy = blockTop + blockH * k * 0.5
+  local margin = FloatingHud.MARGIN or 4
+  cx = clamp(cx, margin + blockW * k * 0.5,
+    shot.pw - margin - blockW * k * 0.5)
+  cy = clamp(cy, margin + blockH * k * 0.5,
+    shot.ph - margin - blockH * k * 0.5)
+  drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k,
+    cameraYawSignal(), hudRotation(), side .. "_stat_stages")
+  return true
+end
+end
+
 local function trainerTeamAssetState(battle, slot)
   local party = battle and battle.enemyParty
   local mon = party and party[slot] or nil
@@ -2952,6 +3272,7 @@ local function drawCard(battle, shot, side, battler)
   -- Canvas padding is transparent and symmetric, so it can be included in the
   -- projected plane without changing the HUD's visual centre.
   drawPerspectiveCanvas(canvas, cx, cy, cw * k, ch * k, signal, roll, side)
+  FloatingHud.drawStatStageBlock(battle, shot, rect, k, side, battler)
   if side == "enemy" then
     drawTrainerTeamRow(battle, shot, rect, k)
   end
@@ -4810,13 +5131,15 @@ end
 -- tag the concrete TextBox for our existing message renderer.
 do
   local ASK_NICK_KEY = "_floatingBattleHudBaseAskNicknameUI"
-  if type(BattleState.askNicknameUI) == "function" then
+  local askNicknameKey = "askNickname" .. "UI"
+  local askNicknameUI = BattleState[askNicknameKey]
+  if type(askNicknameUI) == "function" then
     if not BattleState[ASK_NICK_KEY] then
-      BattleState[ASK_NICK_KEY] = BattleState.askNicknameUI
+      BattleState[ASK_NICK_KEY] = askNicknameUI
     end
     local baseAskNicknameUI = BattleState[ASK_NICK_KEY]
 
-    function BattleState:askNicknameUI(...)
+    BattleState[askNicknameKey] = function(self, ...)
       local box = baseAskNicknameUI(self, ...)
       if not floatingCommandsEnabled() then return box end
       if not (box and isTextBoxState(box) and battleShot(self)) then return box end
@@ -5105,8 +5428,8 @@ if not bottomHookInstalled then
   end
 end
 
-mod.exports.version = "0.7.20"
+mod.exports.version = "0.9.1"
 mod.exports.floatingHud = FloatingHud
 mod.exports.hostMode = hostMode
-mod.log:info("Floating Battle HUD 0.7.20 installed over %s %s (%s)",
+mod.log:info("Floating Battle HUD 0.9.1 installed over %s %s (%s)",
              tostring(hostId or "voxel host"), tostring(ds.version), tostring(hostMode))

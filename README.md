@@ -1,3 +1,57 @@
+## v0.9.1 — Accuracy assets + coherent indicator shadows
+
+- Adds the supplied positive and negative Accuracy crosshair assets, replacing the temporary `ACC` text fallback in normal installs.
+- Gives stat icons and their stage numbers the compact continuous outline used by the recent text-shadow fix, plus the independent down-right drop shadow. They no longer use the large-plate nine-copy expansion that could fragment after perspective sampling.
+- Documents the independent stat-block anchors in both adapters: `FloatingHud.STAT_STAGES.player.x/y` and `FloatingHud.STAT_STAGES.enemy.x/y`. These offsets move only the indicators and use logical HUD pixels (`-X` left, `+X` right, `-Y` up, `+Y` down).
+
+## v0.9.0 — live buff / debuff stat stages
+
+- Adds live stat-stage indicators for both active Pokémon in Red/Blue/Yellow and Gold/Silver/Crystal.
+- Reads the authoritative battle state every draw: Gen 1 uses each battler's `stages`; Gen 2 uses `battle.stages.player/enemy`. No message parsing or event history is involved.
+- Represents Gen 1's single SPECIAL stage and Gen 2's independent SP.ATK / SP.DEF stages according to each engine's real mechanics.
+- Uses the supplied green/red x8 icons and stage-number assets for values `1` through `6`; positive and negative states select their corresponding authored variant.
+- Packs active modifiers into two mirrored columns: the three slots nearest the battleplate fill top-to-bottom first, then the three outer slots. A seventh simultaneous Gen 2 modifier receives a fourth outer row without moving or hiding the first six.
+- Uses a stable stat order and rebuilds directly from current values, so switches, Haze, multi-stat moves, sign changes and returns to neutral cannot leave duplicates or stale indicators.
+- Centralizes positioning and scale under `FloatingHud.STAT_STAGES` in both render adapters (`player/enemy x/y`, block scale, column/row gaps, number x/y).
+- Accuracy uses its dedicated positive/negative crosshair pictogram. A colored `ACC` fallback remains only as a fail-safe if either file is missing.
+
+## v0.8.4 — readable outlined text
+
+- Changes `FloatingHud.TEXT_SHADOW_GROW_PX` to `1` by default after testing v0.8.3 against bright, high-frequency battle scenery.
+- Draws a compact one-final-pixel black outline around each original glyph, plus the existing two-pixel down-right drop shadow.
+- Keeps every outline copy adjacent to the glyph, avoiding the separated word silhouettes that caused the pre-v0.8.3 fragmentation.
+- Applies to Gen 1, Gen 2, menus, messages, status plates, DVs, PP and the custom `%` glyph.
+
+## v0.8.3 — coherent text shadows
+
+- Restores the first public beta's single, coherent shadow copy for every text glyph instead of applying the structural asset-growth pattern to words.
+- Adds `FloatingHud.TEXT_SHADOW_GROW_PX` (default `0`). If increased later, text uses continuous pixel dilation; it never jumps directly to eight separated copies.
+- Keeps `FloatingHud.SHADOW_GROW_PX = 3` for plates, selectors, icons and other authored structural assets.
+- Applies the same correction to Gen 1, Gen 2 and the custom `%` glyph.
+- Removes v0.8.2's unrelated integer-scale `BACK SPRITES` workaround; `BATTLE SIZE: FILL` again remains fully engine-owned.
+
+## v0.8.2 — integer BACK SPRITES presentation
+
+- Keeps Battle Art's pinned Gen 1 back sprite on an integer physical-pixel scale while Floating Battle HUD is active, preventing `BATTLE SIZE: FILL` from stretching neighboring sprite pixels to uneven widths.
+- Leaves the staged 3D world and every authored x8 Floating HUD asset on their existing window-resolution paths; no x8 source is enlarged or resampled a second time.
+- Preserves native/fractional battle sizing whenever `BACK SPRITES` is disabled or Floating Battle HUD does not own the presentation.
+
+## v0.8.1 — Gen 2 floating party
+
+- Adds the Battle Art/Gen 2 PKMN party surface with the live six-slot party, animated engine icons, HP bars, CANCEL row and SWITCH/STATS/CANCEL submenu.
+- Keeps Gen 2's native PartyMenu update, switching, forced replacement, validation and callbacks as the gameplay authority; only its battle presentation is replaced.
+- Continues to fall back to the native party screen for Contest, tutorial, link, Stadium and VR flows.
+
+## v0.8.0 — Battle Art / Gen 2 first implementation
+
+- Adds one-package targeting for Gen 1 and Gen 2, with a dedicated Battle Art compositor path instead of misclassifying its inherited `snapHUDs` function as Dramatic Shape.
+- Adds Battle Art/Gold-Silver-Crystal floating status plates using Gen 2's authoritative active Pokémon, chased HP/status/EXP values, caught marker, DVs and party state.
+- Displays Gen 2 Pokémon gender from the engine's already-resolved `mon.gender` value. Independent placement controls live at `FloatingHud.LAYOUT.enemy.gender.x/y` and `FloatingHud.LAYOUT.player.gender.x/y` in `lib/Gen2BattleArtHud.lua`.
+- Adds Gen 2 floating battle messages, the main command selector and FIGHT move list. Standard ITEM screens, prompts, Contest, tutorial, link, Stadium and VR presentations currently fall back to their native UI.
+- Adds Dark, Steel and Flying move accents and applies Gen 2's type-based Physical/Special split (including Dark as Special and Steel as Physical).
+- Changes the intermediate asset pipeline from x4 to the authored x8 source density. PNG masters are copied 1:1 into working canvases and resampled only once during final perspective projection, preventing cumulative resize damage and avoiding regenerated derivative assets.
+- Gen 1 host integration, input callbacks and gameplay logic remain on the established v0.7.20 path.
+
 ## v0.7.20 — BACK SPRITES foreground compositing
 
 - When **BACK SPRITES** / **show backs** is enabled, every Floating Battle HUD surface is deferred to the final HUD pass so the pinned player sprite can no longer cover it.

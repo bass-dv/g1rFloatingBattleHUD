@@ -1,18 +1,20 @@
 {
   "id": "FLOATING_BATTLE_HUD",
   "name": "Floating Battle HUD",
-  "version": "0.7.20",
+  "version": "0.9.1",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
   "category": "UI",
+  "games": ["gen1", "gen2"],
   "game_version": "0.0.0-dev || >=0.1.37 <2.0.0",
   "priority": 110,
   "dependencies": [],
   "optional_dependencies": [
     "DRAMATIC_SHAPE",
     "POTATO_VOXEL",
-    "VOXEL_ASCENDANT"
+    "VOXEL_ASCENDANT",
+    { "id": "BATTLE_ART_VOXEL_GEN2", "games": ["gen2"] }
   ],
   "conflicts": [],
   "permissions": [
@@ -20,5 +22,5 @@
   ],
   "affects_link": false,
   "github": "bass-dv/g1rFloatingBattleHUD",
-  "description": "Floating Gen-I battle UI for Dramatic Shape, PotatoVoxel and Voxel Ascendant staged 3D battles."
+  "description": "Floating battle UI for Gen 1 voxel hosts and Battle Art staged Gen 2 battles."
 }
